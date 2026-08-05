@@ -50,6 +50,13 @@
     border:1px solid var(--line); border-radius:10px; padding:8px; display:flex; flex-wrap:wrap;
     gap:4px; max-width:340px; box-shadow:0 2px 8px rgba(0,0,0,.08);}
   #labelBar[hidden]{display:none;}
+  #colBar{position:absolute; top:10px; left:10px; z-index:4; background:var(--panel);
+    border:1px solid var(--line); border-radius:10px; padding:8px 10px; display:flex;
+    gap:10px; align-items:center; box-shadow:0 2px 8px rgba(0,0,0,.08); font-size:13px;}
+  #colBar[hidden]{display:none;}
+  #colBar input{width:56px; padding:4px 6px; border:1px solid var(--line); border-radius:6px; font:inherit;}
+  .col-el{fill:var(--wall);}
+  .col-el.selected{fill:var(--accent);}
   #labelBar button{padding:4px 8px; font-size:13px;}
   #labelBar button.active{background:var(--accent-soft); border-color:var(--accent); color:var(--accent); font-weight:600;}
   .entr{fill:var(--ok); font-weight:700; pointer-events:none;}
@@ -68,6 +75,7 @@
     <button id="bWall" class="tool" title="Додати стіну: клік — початок, клік — кінець (W)">▬ Стіна</button>
     <button id="bDoor" class="tool" title="Додати двері: клік по стіні (D)">◧ Двері</button>
     <button id="bLabel" class="tool" title="Додати ярлик кімнати: вибери назву і клікни на плані (L)">🏷 Ярлик</button>
+    <button id="bColumn" class="tool" title="Поставити колону: задай розмір і клікни на плані (C)">▊ Колона</button>
     <button id="bDelete" class="danger" title="Видалити вибране (Delete)" disabled>🗑</button>
   </span>
   <span class="group">
@@ -91,6 +99,11 @@
 <div id="stage">
   <svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg>
   <div id="labelBar" hidden></div>
+  <div id="colBar" hidden>
+    <b style="margin-right:4px">Колона:</b>
+    <label>ширина <input id="colW" type="number" min="10" max="200" step="5" value="30"> см</label>
+    <label>глибина <input id="colH" type="number" min="10" max="200" step="5" value="30"> см</label>
+  </div>
 </div>
 <footer>
   <span class="hint" id="hint"></span>
@@ -167,6 +180,7 @@ const ORIGINAL = {
     {id:'l7', x:9.73,  y:6.95, text:'Ванна'},
     {id:'l8', x:8.95,  y:9.62, text:'Санвузол'},
   ],
+  columns: [],
 };
 
 const LABEL_PRESETS = ['Кімната','Спальня','Вітальня','Кухня','Ванна','Туалет','Санвузол',
@@ -191,7 +205,7 @@ const ENTRANCES = [
 
 /* ---------------- стан ---------------- */
 function normalizeState(s){
-  return {walls:s.walls||[], doors:s.doors||[], labels:s.labels||[]};
+  return {walls:s.walls||[], doors:s.doors||[], labels:s.labels||[], columns:s.columns||[]};
 }
 // Версія базового плану. Коли геометрія ORIGINAL оновлюється, старий
 // автосейв користувача зберігається у «Мої варіанти», а показується новий план.
@@ -227,6 +241,7 @@ let lastDoorTap = null;        // для подвійного кліку по д
 let lastLabelTap = null;       // для подвійного кліку по ярликах
 let labelPreset = LABEL_PRESETS[0];
 let labelBoxes = {};           // bbox ярликів з останнього рендера (для кліків)
+let colSize = {w:0.30, h:0.30}; // розмір нової колони, м
 
 const view = {s:60, x:40, y:40};
 const svg = document.getElementById('svg');
@@ -320,6 +335,11 @@ function pick(p){
     if(dd < Math.max(0.16, w.t) && (!bestDoor || dd<bestDoor.d)) bestDoor={type:'door', id:d.id, d:dd};
   }
   if(bestDoor) return bestDoor;
+  for(const c of state.columns){
+    const m = 0.06;
+    if(p.x>=c.x-c.w/2-m && p.x<=c.x+c.w/2+m && p.y>=c.y-c.h/2-m && p.y<=c.y+c.h/2+m)
+      return {type:'column', id:c.id};
+  }
   for(const l of state.labels){
     const b = labelBoxes[l.id];
     if(!b) continue;
@@ -387,6 +407,9 @@ function computeRooms(){
     ctx.lineWidth = Math.max(w.t/res, 2.5);
     ctx.beginPath(); ctx.moveTo(px(w.x1),px(w.y1)); ctx.lineTo(px(w.x2),px(w.y2)); ctx.stroke();
   }
+  ctx.fillStyle='#000';
+  for(const c of state.columns)
+    ctx.fillRect(px(c.x-c.w/2), px(c.y-c.h/2), c.w/res, c.h/res);
   const img = ctx.getImageData(0,0,W,H).data;
   const seen = new Uint8Array(W*H);
   const out = [];
@@ -470,6 +493,17 @@ function render(){
   for(const w of state.walls){
     const cls = 'wall-el' + (sel&&sel.type==='wall'&&sel.id===w.id?' selected':(hoverId===w.id?' hover':''));
     el('line',{x1:w.x1,y1:w.y1,x2:w.x2,y2:w.y2,'stroke-width':w.t, class:cls, 'data-id':w.id},gWalls);
+  }
+
+  // колони
+  for(const c of state.columns){
+    const isSel = sel && sel.type==='column' && sel.id===c.id;
+    el('rect',{x:c.x-c.w/2, y:c.y-c.h/2, width:c.w, height:c.h,
+               class:'col-el'+(isSel?' selected':'')},g);
+  }
+  if(ghost && ghost.type==='column'){
+    el('rect',{x:ghost.x-colSize.w/2, y:ghost.y-colSize.h/2, width:colSize.w, height:colSize.h,
+               fill:'var(--accent)', opacity:0.5},g);
   }
 
   // зовнішній контур
@@ -569,16 +603,18 @@ const HINTS = {
   wall:  'Клік — початок стіни, другий клік — кінець. Прив\'язка до кутів, стін і сітки 5 см. Esc — вийти.',
   door:  'Клікни по стіні, щоб поставити двері (потім їх можна тягнути вздовж стіни). Esc — вийти.',
   label: 'Вибери назву в палітрі й клікни на плані, куди її поставити. «Свій текст…» — довільний напис. Esc — вийти.',
+  column:'Задай розміри колони згори і клікай на плані, де вона стоїть. Потім її можна тягати. Esc — вийти.',
 };
 function updateButtons(){
   document.getElementById('bUndo').disabled = histIdx<=0;
   document.getElementById('bRedo').disabled = histIdx>=history.length-1;
   document.getElementById('bDelete').disabled = !sel;
-  for(const [id,m] of [['bSelect','select'],['bWall','wall'],['bDoor','door'],['bLabel','label']])
+  for(const [id,m] of [['bSelect','select'],['bWall','wall'],['bDoor','door'],['bLabel','label'],['bColumn','column']])
     document.getElementById(id).classList.toggle('active', mode===m);
   svg.classList.toggle('mode-wall', mode==='wall');
-  svg.classList.toggle('mode-door', mode==='door' || mode==='label');
+  svg.classList.toggle('mode-door', mode==='door' || mode==='label' || mode==='column');
   document.getElementById('labelBar').hidden = (mode!=='label');
+  document.getElementById('colBar').hidden = !(mode==='column' || (sel && sel.type==='column'));
   document.getElementById('hint').textContent = HINTS[mode];
 }
 function setMode(m){
@@ -595,6 +631,8 @@ function deleteSel(){
     state.doors = state.doors.filter(d=>d.id!==sel.id);
   } else if(sel.type==='label'){
     state.labels = state.labels.filter(l=>l.id!==sel.id);
+  } else if(sel.type==='column'){
+    state.columns = state.columns.filter(c=>c.id!==sel.id);
   }
   sel=null; commit();
 }
@@ -647,6 +685,14 @@ svg.addEventListener('pointerdown', e=>{
     }
     return;
   }
+  if(mode==='column'){
+    const nc = {id:uid('c'), x:Math.round(p.x/GRID)*GRID, y:Math.round(p.y/GRID)*GRID,
+                w:colSize.w, h:colSize.h};
+    state.columns.push(nc);
+    sel = {type:'column', id:nc.id};
+    commit();
+    return;
+  }
   if(mode==='label'){
     let text = labelPreset;
     if(text === 'Свій текст…'){
@@ -670,6 +716,13 @@ svg.addEventListener('pointerdown', e=>{
     sel={type:'wall', id:hit.id};
     const w=wallById(hit.id);
     drag={type:'wall', id:hit.id, start:p, orig:{x1:w.x1,y1:w.y1,x2:w.x2,y2:w.y2}, moved:false};
+    updateButtons(); render();
+  } else if(hit && hit.type==='column'){
+    const c = state.columns.find(x=>x.id===hit.id);
+    document.getElementById('colW').value = Math.round(c.w*100);
+    document.getElementById('colH').value = Math.round(c.h*100);
+    sel={type:'column', id:hit.id};
+    drag={type:'column', id:hit.id, off:{x:p.x-c.x, y:p.y-c.y}, moved:false};
     updateButtons(); render();
   } else if(hit && hit.type==='label'){
     const l = state.labels.find(x=>x.id===hit.id);
@@ -740,6 +793,12 @@ svg.addEventListener('pointermove', e=>{
       if(drag.end===1){ w.x1=q.x; w.y1=q.y; } else { w.x2=q.x; w.y2=q.y; }
       render(); return;
     }
+    if(drag.type==='column'){
+      const c=state.columns.find(x=>x.id===drag.id); if(!c) return;
+      c.x = Math.round((p.x-drag.off.x)/GRID)*GRID;
+      c.y = Math.round((p.y-drag.off.y)/GRID)*GRID;
+      drag.moved=true; render(); return;
+    }
     if(drag.type==='label'){
       const l=state.labels.find(x=>x.id===drag.id); if(!l) return;
       l.x = Math.round((p.x-drag.off.x)/GRID)*GRID;
@@ -764,6 +823,10 @@ svg.addEventListener('pointermove', e=>{
   if(mode==='door'){
     const nb=nearestWall(p);
     ghost = nb? {type:'door', w0:nb.wall, t:nb.t} : null;
+    render(); return;
+  }
+  if(mode==='column'){
+    ghost = {type:'column', x:Math.round(p.x/GRID)*GRID, y:Math.round(p.y/GRID)*GRID};
     render(); return;
   }
   if(mode==='select'){
@@ -829,6 +892,7 @@ document.addEventListener('keydown', e=>{
   if(k==='w') setMode('wall');
   if(k==='d') setMode('door');
   if(k==='l') setMode('label');
+  if(k==='c') setMode('column');
   if(k==='f') fit();
 });
 
@@ -1124,7 +1188,7 @@ document.getElementById('importFile').onchange=e=>{
     try{
       const j=JSON.parse(txt);
       if(!Array.isArray(j.walls)) throw 0;
-      replaceState({walls:j.walls, doors:j.doors||[], labels:j.labels||[]});
+      replaceState({walls:j.walls, doors:j.doors||[], labels:j.labels||[], columns:j.columns||[]});
     }catch(_){ alert('Не вдалося прочитати файл — це не план у форматі JSON.'); }
   });
   e.target.value='';
@@ -1134,6 +1198,19 @@ document.getElementById('importFile').onchange=e=>{
 document.getElementById('bSelect').onclick=()=>setMode('select');
 document.getElementById('bWall').onclick=()=>setMode('wall');
 document.getElementById('bDoor').onclick=()=>setMode('door');
+document.getElementById('bLabel').onclick=()=>setMode('label');
+document.getElementById('bColumn').onclick=()=>setMode('column');
+for(const [inp,key] of [['colW','w'],['colH','h']]){
+  document.getElementById(inp).onchange=e=>{
+    const v = Math.max(10, Math.min(200, +e.target.value || 30));
+    e.target.value = v;
+    colSize[key] = v/100;
+    if(sel && sel.type==='column'){
+      const c = state.columns.find(x=>x.id===sel.id);
+      if(c){ c[key] = v/100; commit(); }
+    } else if(mode==='column'){ render(); }
+  };
+}
 document.getElementById('bDelete').onclick=deleteSel;
 document.getElementById('bUndo').onclick=undo;
 document.getElementById('bRedo').onclick=redo;
