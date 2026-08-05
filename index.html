@@ -193,7 +193,26 @@ const ENTRANCES = [
 function normalizeState(s){
   return {walls:s.walls||[], doors:s.doors||[], labels:s.labels||[]};
 }
-let state = normalizeState(load('kvartura_current') || deepCopy(ORIGINAL));
+// Версія базового плану. Коли геометрія ORIGINAL оновлюється, старий
+// автосейв користувача зберігається у «Мої варіанти», а показується новий план.
+const PLAN_VERSION = 2;
+let state;
+{
+  const saved = load('kvartura_current');
+  const ver = load('kvartura_plan_version');
+  if(saved && ver !== PLAN_VERSION){
+    try{
+      const v = load('kvartura_variants') || {};
+      v['Моє редагування (до оновлення плану)'] = normalizeState(saved);
+      store('kvartura_variants', v);
+    }catch(e){}
+    state = deepCopy(ORIGINAL);
+    store('kvartura_current', state); store('kvartura_plan_version', PLAN_VERSION);
+  } else {
+    state = normalizeState(saved || deepCopy(ORIGINAL));
+  }
+  store('kvartura_plan_version', PLAN_VERSION);
+}
 let idSeq = 100;
 let history = [JSON.stringify(state)], histIdx = 0;
 let mode = 'select';           // select | wall | door
@@ -334,13 +353,13 @@ function commit(){
   history.push(snap);
   if(history.length>120) history.shift();
   histIdx = history.length-1;
-  store('kvartura_current', state);
+  store('kvartura_current', state); store('kvartura_plan_version', PLAN_VERSION);
   computeRooms(); render(); updateButtons();
 }
 function undo(){ if(histIdx>0){ histIdx--; state=JSON.parse(history[histIdx]); afterHistory(); } }
 function redo(){ if(histIdx<history.length-1){ histIdx++; state=JSON.parse(history[histIdx]); afterHistory(); } }
 function afterHistory(){
-  sel=null; store('kvartura_current', state);
+  sel=null; store('kvartura_current', state); store('kvartura_plan_version', PLAN_VERSION);
   computeRooms(); render(); updateButtons();
 }
 function replaceState(s){
