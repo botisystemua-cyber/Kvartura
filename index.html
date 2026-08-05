@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Finlandia 21B — планувальник квартир</title>
+<style>
+  :root{
+    --bg:#eef0f3; --panel:#ffffff; --line:#d8dce2; --ink:#22262c;
+    --accent:#2563eb; --accent-soft:#dbeafe; --ok:#15803d; --danger:#b91c1c;
+    --wall:#2b2f36; --floor:#faf7f0;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html,body{height:100%; overflow:hidden;}
+  body{font:14px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; color:var(--ink); background:var(--bg); display:flex; flex-direction:column;}
+  header{background:var(--panel); border-bottom:1px solid var(--line); padding:8px 12px; display:flex; flex-wrap:wrap; gap:8px; align-items:center; z-index:5;}
+  header .title{font-weight:600; margin-right:8px; white-space:nowrap;}
+  .group{display:flex; gap:4px; align-items:center; padding:2px 8px; border-right:1px solid var(--line);}
+  .group:last-child{border-right:none;}
+  button, select{
+    font:inherit; background:#f5f6f8; border:1px solid var(--line); color:var(--ink);
+    border-radius:8px; padding:6px 10px; cursor:pointer; white-space:nowrap;
+  }
+  button:hover{background:#e9ecf1;}
+  button.tool.active{background:var(--accent-soft); border-color:var(--accent); color:var(--accent); font-weight:600;}
+  button:disabled{opacity:.4; cursor:default;}
+  button.danger{color:var(--danger);}
+  #stage{flex:1; position:relative; overflow:hidden;}
+  svg{position:absolute; inset:0; width:100%; height:100%; touch-action:none; display:block; cursor:default;}
+  svg.mode-wall, svg.mode-door{cursor:crosshair;}
+  svg.panning{cursor:grabbing;}
+  footer{background:var(--panel); border-top:1px solid var(--line); padding:6px 12px; display:flex; flex-wrap:wrap; gap:16px; align-items:center; font-size:13px;}
+  footer .hint{color:#5b6472; flex:1; min-width:200px;}
+  footer .sum{font-weight:600;}
+  .wall-el{stroke:var(--wall); stroke-linecap:square;}
+  .wall-el.hover{stroke:#4b5563;}
+  .wall-el.selected{stroke:var(--accent);}
+  .door-gap{stroke:var(--floor); stroke-linecap:butt;}
+  .door-arc{stroke:#8a919c; fill:none;}
+  .door-hit.selected-door + .door-arc{stroke:var(--accent);}
+  text{user-select:none; -webkit-user-select:none;}
+  .room-label{fill:#6b7280; text-anchor:middle; pointer-events:none;}
+  .room-label .val{fill:#374151; font-weight:600;}
+  .len-label{fill:var(--accent); text-anchor:middle; pointer-events:none; font-weight:600; paint-order:stroke; stroke:#fff; stroke-width:.09px;}
+  .handle{fill:#fff; stroke:var(--accent); cursor:move;}
+  .snapmark{stroke:var(--accent); pointer-events:none;}
+  .entr{fill:var(--ok); font-weight:700; pointer-events:none;}
+  .entr-line{stroke:var(--ok); fill:none;}
+  .entr-head{fill:var(--ok); stroke:none;}
+  dialog{border:1px solid var(--line); border-radius:12px; padding:16px; max-width:340px;}
+  dialog::backdrop{background:rgba(0,0,0,.25);}
+  @media (max-width:760px){ header .title{display:none;} .group{padding:2px 4px;} button{padding:6px 8px;} }
+</style>
+</head>
+<body>
+<header>
+  <span class="title">Finlandia&nbsp;21B — планувальник</span>
+  <span class="group">
+    <button id="bSelect" class="tool" title="Вибір і переміщення (V)">✥ Вибір</button>
+    <button id="bWall" class="tool" title="Додати стіну: клік — початок, клік — кінець (W)">▬ Стіна</button>
+    <button id="bDoor" class="tool" title="Додати двері: клік по стіні (D)">◧ Двері</button>
+    <button id="bDelete" class="danger" title="Видалити вибране (Delete)" disabled>🗑</button>
+  </span>
+  <span class="group">
+    <button id="bUndo" title="Скасувати (Ctrl+Z)" disabled>↶</button>
+    <button id="bRedo" title="Повернути (Ctrl+Shift+Z)" disabled>↷</button>
+    <button id="bFit" title="Вписати план у екран (F)">⤢ Вписати</button>
+  </span>
+  <span class="group">
+    <select id="variantSel" title="Збережені варіанти планування"><option value="">— варіанти —</option></select>
+    <button id="bSaveVar" title="Зберегти поточний стан як варіант">💾 Зберегти</button>
+    <button id="bDelVar" title="Видалити вибраний варіант" disabled>✕</button>
+    <button id="bReset" title="Повернути початковий план з PDF">⟲ План з PDF</button>
+  </span>
+  <span class="group">
+    <button id="bExport" title="Завантажити план як JSON-файл">⇩ Експорт</button>
+    <button id="bImport" title="Відкрити план із JSON-файлу">⇧ Імпорт</button>
+    <input type="file" id="importFile" accept=".json" hidden>
+  </span>
+</header>
+<div id="stage"><svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg></div>
+<footer>
+  <span class="hint" id="hint"></span>
+  <span class="sum" id="sum"></span>
+</footer>
+
+<script>
+'use strict';
+/* ============================================================
+   Finlandia 21B — 2D планувальник.
+   Всі координати — метри. Вісь X вправо, Y вниз.
+   Зовнішній контур зафіксований (знятий з PDF, масштаб 1:100).
+   ============================================================ */
+
+const CONTOUR = [
+  [0.00, 2.30],  // початок діагоналі (Вхід 1)
+  [2.30, 0.00],
+  [11.95, 0.00],
+  [11.95, 4.31],
+  [11.64, 4.31],
+  [11.64, 10.03],
+  [0.00, 10.03],
+];
+const EXT_T = 0.25;   // товщина зовнішньої стіни, м
+const INT_T = 0.10;   // товщина перегородки за замовчуванням, м
+const GRID  = 0.05;   // крок сітки прив'язки, м
+
+// Початкове планування, перенесене з PDF (приблизно ±10 см)
+const ORIGINAL = {
+  walls: [
+    {id:'w1',  x1:6.26, y1:0.00, x2:6.26,  y2:3.34, t:INT_T}, // спальня 1, ліва
+    {id:'w2',  x1:6.26, y1:3.34, x2:8.88,  y2:3.34, t:INT_T}, // спальня 1, нижня
+    {id:'w3',  x1:8.88, y1:0.00, x2:8.88,  y2:4.31, t:INT_T}, // між спальнями 1 і 2
+    {id:'w4',  x1:8.88, y1:4.31, x2:11.64, y2:4.31, t:INT_T}, // спальня 2, нижня
+    {id:'w5',  x1:10.23,y1:4.31, x2:10.23, y2:8.48, t:INT_T}, // коридор/санвузол 1, ліва
+    {id:'w6',  x1:10.23,y1:5.90, x2:11.64, y2:5.90, t:INT_T}, // санвузол 1, верхня
+    {id:'w7',  x1:0.00, y1:6.78, x2:10.23, y2:6.78, t:INT_T}, // головна горизонтальна
+    {id:'w8',  x1:4.45, y1:6.78, x2:4.45,  y2:10.03,t:INT_T}, // спальня 3 / кухня
+    {id:'w9',  x1:7.42, y1:6.78, x2:7.42,  y2:10.03,t:INT_T}, // кухня / тамбур і комора
+    {id:'w10', x1:7.42, y1:8.48, x2:11.64, y2:8.48, t:INT_T}, // тамбур / санвузол 2
+    {id:'w11', x1:8.66, y1:8.48, x2:8.66,  y2:10.03,t:INT_T}, // комора / санвузол 2
+  ],
+  doors: [
+    {id:'d1', wall:'w2',  t:0.50, w:0.85, side: 1, hinge:0}, // у спальню 1
+    {id:'d2', wall:'w3',  t:0.87, w:0.85, side: 1, hinge:1}, // у спальню 2
+    {id:'d3', wall:'w5',  t:0.19, w:0.95, side:-1, hinge:0}, // салон → коридор
+    {id:'d4', wall:'w6',  t:0.38, w:0.70, side: 1, hinge:0}, // санвузол 1
+    {id:'d5', wall:'w7',  t:0.376,w:0.85, side: 1, hinge:1}, // у спальню 3
+    {id:'d6', wall:'w7',  t:0.606,w:1.30, side: 1, hinge:0}, // прохід на кухню
+    {id:'d7', wall:'w7',  t:0.948,w:0.70, side: 1, hinge:0}, // прохід у тамбур
+    {id:'d8', wall:'w10', t:0.15, w:0.70, side: 1, hinge:0}, // комора
+    {id:'d9', wall:'w10', t:0.505,w:0.70, side: 1, hinge:1}, // санвузол 2
+  ],
+};
+
+const ENTRANCES = [
+  {label:'Вхід 1', gapAt:[1.15,1.15], along:[0.7071,-0.7071], gap:0.95, arrowFrom:[-0.55,-0.55], text:[-1.35,-0.70]},
+  {label:'Вхід 2', gapAt:[5.72,0.00], along:[1,0],            gap:0.90, arrowFrom:[0,-0.85],    text:[0.55,-0.62]},
+];
+
+/* ---------------- стан ---------------- */
+let state = load('kvartura_current') || deepCopy(ORIGINAL);
+let idSeq = 100;
+let history = [JSON.stringify(state)], histIdx = 0;
+let mode = 'select';           // select | wall | door
+let sel = null;                // {type:'wall'|'door', id}
+let hoverId = null;
+let drag = null;               // контекст перетягування
+let drawStart = null;          // перша точка нової стіни
+let ghost = null;              // прев'ю стіни/дверей
+let snapMark = null;
+let rooms = [];
+let lastDoorTap = null;        // для подвійного кліку по дверях
+
+const view = {s:60, x:40, y:40};
+const svg = document.getElementById('svg');
+
+/* ---------------- утиліти ---------------- */
+function deepCopy(o){ return JSON.parse(JSON.stringify(o)); }
+function load(k){ try{ const v = localStorage.getItem(k); return v ? JSON.parse(v) : null; }catch(e){ return null; } }
+function store(k,v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
+function uid(p){ return p + (++idSeq); }
+function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
+function wallLen(w){ return Math.hypot(w.x2-w.x1, w.y2-w.y1); }
+function wallById(id){ return state.walls.find(w=>w.id===id); }
+function projectToSeg(p, x1,y1,x2,y2){
+  const dx=x2-x1, dy=y2-y1, L2=dx*dx+dy*dy;
+  if(L2===0) return {x:x1,y:y1,t:0};
+  let t=((p.x-x1)*dx+(p.y-y1)*dy)/L2; t=Math.max(0,Math.min(1,t));
+  return {x:x1+t*dx, y:y1+t*dy, t};
+}
+function toScreen(p){ return {x:p.x*view.s+view.x, y:p.y*view.s+view.y}; }
+function toWorld(sx,sy){ return {x:(sx-view.x)/view.s, y:(sy-view.y)/view.s}; }
+function eventWorld(e){
+  const r = svg.getBoundingClientRect();
+  return toWorld(e.clientX-r.left, e.clientY-r.top);
+}
+function contourSegs(){
+  const s=[];
+  for(let i=0;i<CONTOUR.length;i++){
+    const a=CONTOUR[i], b=CONTOUR[(i+1)%CONTOUR.length];
+    s.push({x1:a[0],y1:a[1],x2:b[0],y2:b[1]});
+  }
+  return s;
+}
+
+/* ---------------- прив'язка (snap) ---------------- */
+function snapPoint(p, opts={}){
+  const excl = opts.excludeWall;
+  const other = opts.fixedOther;   // другий кінець стіни, що редагується
+  const PT = 0.18, EDGE = 0.12, AXIS = 0.10;
+  let best = null;
+
+  const pts = CONTOUR.map(c=>({x:c[0],y:c[1]}));
+  for(const w of state.walls){
+    if(w.id===excl) continue;
+    pts.push({x:w.x1,y:w.y1},{x:w.x2,y:w.y2});
+  }
+  for(const q of pts){
+    const d = dist(p,q);
+    if(d<PT && (!best || d<best.d)) best={x:q.x,y:q.y,d,kind:'point'};
+  }
+  if(best) return {x:best.x, y:best.y, kind:'point'};
+
+  let res = {x:p.x, y:p.y};
+  if(other){
+    if(Math.abs(res.x-other.x)<AXIS) res.x=other.x;
+    if(Math.abs(res.y-other.y)<AXIS) res.y=other.y;
+  }
+  let edge=null;
+  const segs = contourSegs().concat(state.walls.filter(w=>w.id!==excl));
+  for(const s of segs){
+    const q = projectToSeg(res, s.x1,s.y1,s.x2,s.y2);
+    const d = dist(res,q);
+    if(d<EDGE && (!edge || d<edge.d)) edge={x:q.x,y:q.y,d, sx1:s.x1,sy1:s.y1,sx2:s.x2,sy2:s.y2};
+  }
+  if(edge){
+    // координату вздовж краю теж тягнемо до сітки: округлюємо і проєктуємо назад
+    const gx=Math.round(edge.x/GRID)*GRID, gy=Math.round(edge.y/GRID)*GRID;
+    const q=projectToSeg({x:gx,y:gy}, edge.sx1,edge.sy1,edge.sx2,edge.sy2);
+    return {x:q.x, y:q.y, kind:'edge'};
+  }
+  return {x:Math.round(res.x/GRID)*GRID, y:Math.round(res.y/GRID)*GRID, kind:'grid'};
+}
+
+/* ---------------- пошук елементів під курсором ---------------- */
+function pick(p){
+  const tolPx = 10 / view.s;
+  if(sel && sel.type==='wall'){
+    const w = wallById(sel.id);
+    if(w){
+      const hr = 12/view.s;
+      if(dist(p,{x:w.x1,y:w.y1})<hr) return {type:'handle', id:w.id, end:1};
+      if(dist(p,{x:w.x2,y:w.y2})<hr) return {type:'handle', id:w.id, end:2};
+    }
+  }
+  let bestDoor=null;
+  for(const d of state.doors){
+    const w = wallById(d.wall); if(!w) continue;
+    const L = wallLen(w), ux=(w.x2-w.x1)/L, uy=(w.y2-w.y1)/L;
+    const cx=w.x1+ux*d.t*L, cy=w.y1+uy*d.t*L, h=d.w/2;
+    const q = projectToSeg(p, cx-ux*h, cy-uy*h, cx+ux*h, cy+uy*h);
+    const dd = dist(p,q);
+    if(dd < Math.max(0.16, w.t) && (!bestDoor || dd<bestDoor.d)) bestDoor={type:'door', id:d.id, d:dd};
+  }
+  if(bestDoor) return bestDoor;
+  let bestWall=null;
+  for(const w of state.walls){
+    const q = projectToSeg(p, w.x1,w.y1,w.x2,w.y2);
+    const dd = dist(p,q);
+    if(dd < Math.max(0.14, w.t/2 + tolPx) && (!bestWall || dd<bestWall.d)) bestWall={type:'wall', id:w.id, d:dd};
+  }
+  return bestWall;
+}
+function nearestWall(p, maxD=0.35){
+  let best=null;
+  for(const w of state.walls){
+    const q = projectToSeg(p, w.x1,w.y1,w.x2,w.y2);
+    const dd = dist(p,q);
+    if(dd<maxD && (!best || dd<best.d)) best={wall:w, t:q.t, d:dd};
+  }
+  return best;
+}
+
+/* ---------------- історія ---------------- */
+function commit(){
+  const snap = JSON.stringify(state);
+  if(snap === history[histIdx]) return;
+  history = history.slice(0, histIdx+1);
+  history.push(snap);
+  if(history.length>120) history.shift();
+  histIdx = history.length-1;
+  store('kvartura_current', state);
+  computeRooms(); render(); updateButtons();
+}
+function undo(){ if(histIdx>0){ histIdx--; state=JSON.parse(history[histIdx]); afterHistory(); } }
+function redo(){ if(histIdx<history.length-1){ histIdx++; state=JSON.parse(history[histIdx]); afterHistory(); } }
+function afterHistory(){
+  sel=null; store('kvartura_current', state);
+  computeRooms(); render(); updateButtons();
+}
+function replaceState(s){
+  state = deepCopy(s); sel=null; drawStart=null; ghost=null;
+  commit();
+}
+
+/* ---------------- площі кімнат (flood fill) ---------------- */
+function computeRooms(){
+  const res = 0.04, pad = 0.5;
+  let maxX=0,maxY=0;
+  for(const c of CONTOUR){ maxX=Math.max(maxX,c[0]); maxY=Math.max(maxY,c[1]); }
+  const W = Math.ceil((maxX+2*pad)/res), H = Math.ceil((maxY+2*pad)/res);
+  const cv = document.createElement('canvas'); cv.width=W; cv.height=H;
+  const ctx = cv.getContext('2d', {willReadFrequently:true});
+  ctx.fillStyle='#000'; ctx.fillRect(0,0,W,H);
+  const px = v => (v+pad)/res;
+  ctx.fillStyle='#fff';
+  ctx.beginPath();
+  CONTOUR.forEach((c,i)=> i? ctx.lineTo(px(c[0]),px(c[1])) : ctx.moveTo(px(c[0]),px(c[1])));
+  ctx.closePath(); ctx.fill();
+  ctx.strokeStyle='#000'; ctx.lineCap='square';
+  ctx.lineWidth = Math.max(EXT_T/res, 2); ctx.stroke();
+  for(const w of state.walls){
+    ctx.lineWidth = Math.max(w.t/res, 2.5);
+    ctx.beginPath(); ctx.moveTo(px(w.x1),px(w.y1)); ctx.lineTo(px(w.x2),px(w.y2)); ctx.stroke();
+  }
+  const img = ctx.getImageData(0,0,W,H).data;
+  const seen = new Uint8Array(W*H);
+  const out = [];
+  const qx = new Int32Array(W*H), qy = new Int32Array(W*H);
+  for(let y=0;y<H;y++) for(let x=0;x<W;x++){
+    const i=y*W+x;
+    if(seen[i] || img[i*4]<128) continue;
+    let head=0, tail=0, n=0, sx=0, sy=0;
+    qx[tail]=x; qy[tail]=y; tail++; seen[i]=1;
+    while(head<tail){
+      const cx=qx[head], cy=qy[head]; head++;
+      n++; sx+=cx; sy+=cy;
+      const nb=[[cx+1,cy],[cx-1,cy],[cx,cy+1],[cx,cy-1]];
+      for(const [nx,ny] of nb){
+        if(nx<0||ny<0||nx>=W||ny>=H) continue;
+        const j=ny*W+nx;
+        if(!seen[j] && img[j*4]>=128){ seen[j]=1; qx[tail]=nx; qy[tail]=ny; tail++; }
+      }
+    }
+    const area = n*res*res;
+    if(area>=0.6) out.push({area, cx:(sx/n)*res-pad, cy:(sy/n)*res-pad});
+  }
+  out.sort((a,b)=>b.area-a.area);
+  rooms = out;
+  const total = out.reduce((s,r)=>s+r.area,0);
+  document.getElementById('sum').textContent =
+    `Кімнат: ${out.length} · разом ≈ ${total.toFixed(1)} м² (за PDF: 106,5 м²)`;
+}
+
+/* ---------------- рендер ---------------- */
+const NS='http://www.w3.org/2000/svg';
+function el(tag, attrs, parent){
+  const e=document.createElementNS(NS,tag);
+  for(const k in attrs) e.setAttribute(k, attrs[k]);
+  if(parent) parent.appendChild(e);
+  return e;
+}
+function render(){
+  svg.textContent='';
+  const g = el('g', {transform:`matrix(${view.s} 0 0 ${view.s} ${view.x} ${view.y})`}, svg);
+
+  // фон-сітка
+  const gGrid = el('g',{},g);
+  for(let x=-1;x<=13; x+=0.5){
+    el('line',{x1:x,y1:-1.5,x2:x,y2:11.5,'stroke':x%1===0?'#dfe3e9':'#e9ecf1','stroke-width':x%1===0?0.014:0.008},gGrid);
+  }
+  for(let y=-1;y<=11; y+=0.5){
+    el('line',{x1:-1,y1:y,x2:13,y2:y,'stroke':y%1===0?'#dfe3e9':'#e9ecf1','stroke-width':y%1===0?0.014:0.008},gGrid);
+  }
+
+  // підлога
+  const dPath = CONTOUR.map((c,i)=>(i?'L':'M')+c[0]+' '+c[1]).join(' ')+' Z';
+  el('path',{d:dPath, fill:'var(--floor)'},g);
+
+  // підписи площ
+  const gRooms = el('g',{},g);
+  for(const r of rooms){
+    const t = el('text',{x:r.cx, y:r.cy, class:'room-label','font-size':0.34},gRooms);
+    const tsp = el('tspan',{class:'val'},t); tsp.textContent = r.area.toFixed(1);
+    const tsp2 = el('tspan',{'font-size':0.26},t); tsp2.textContent=' м²';
+  }
+
+  // внутрішні стіни
+  const gWalls = el('g',{},g);
+  for(const w of state.walls){
+    const cls = 'wall-el' + (sel&&sel.type==='wall'&&sel.id===w.id?' selected':(hoverId===w.id?' hover':''));
+    el('line',{x1:w.x1,y1:w.y1,x2:w.x2,y2:w.y2,'stroke-width':w.t, class:cls, 'data-id':w.id},gWalls);
+  }
+
+  // зовнішній контур
+  el('path',{d:dPath, fill:'none', stroke:'var(--wall)','stroke-width':EXT_T,'stroke-linejoin':'miter'},g);
+
+  // двері
+  const gDoors = el('g',{},g);
+  for(const d of state.doors){
+    const w = wallById(d.wall); if(!w) continue;
+    const L=wallLen(w), ux=(w.x2-w.x1)/L, uy=(w.y2-w.y1)/L;
+    const cx=w.x1+ux*d.t*L, cy=w.y1+uy*d.t*L, h=d.w/2;
+    const a={x:cx-ux*h, y:cy-uy*h}, b={x:cx+ux*h, y:cy+uy*h};
+    const isSel = sel&&sel.type==='door'&&sel.id===d.id;
+    el('line',{x1:a.x,y1:a.y,x2:b.x,y2:b.y, class:'door-gap','stroke-width':w.t+0.03},gDoors);
+    if(d.w < 1.15){
+      const nx=-uy*d.side, ny=ux*d.side;
+      const hinge = d.hinge? b : a, free = d.hinge? a : b;
+      const tip = {x:hinge.x+nx*d.w, y:hinge.y+ny*d.w};
+      const sweep = ((d.hinge?1:0) ^ (d.side>0?1:0)) ? 0 : 1;
+      el('path',{d:`M ${free.x} ${free.y} A ${d.w} ${d.w} 0 0 ${sweep} ${tip.x} ${tip.y}`,
+                 class:'door-arc'+(isSel?' selected':''),'stroke-width':0.02,
+                 stroke:isSel?'var(--accent)':'#8a919c'},gDoors);
+      el('line',{x1:hinge.x,y1:hinge.y,x2:tip.x,y2:tip.y,stroke:isSel?'var(--accent)':'#6b7280','stroke-width':0.04},gDoors);
+    } else if(isSel){
+      el('line',{x1:a.x,y1:a.y,x2:b.x,y2:b.y, stroke:'var(--accent)','stroke-width':0.03, 'stroke-dasharray':'0.08 0.06'},gDoors);
+    }
+  }
+
+  // входи
+  for(const en of ENTRANCES){
+    const [gx,gy]=en.gapAt, [ax,ay]=en.along;
+    const h=en.gap/2;
+    el('line',{x1:gx-ax*h,y1:gy-ay*h,x2:gx+ax*h,y2:gy+ay*h, stroke:'var(--floor)','stroke-width':EXT_T+0.04,'stroke-linecap':'butt'},g);
+    const from={x:gx+en.arrowFrom[0], y:gy+en.arrowFrom[1]};
+    const dirx=gx-from.x, diry=gy-from.y, dl=Math.hypot(dirx,diry);
+    const ux2=dirx/dl, uy2=diry/dl;
+    const tip={x:gx-ux2*0.05, y:gy-uy2*0.05};
+    el('line',{x1:from.x,y1:from.y,x2:tip.x-ux2*0.15,y2:tip.y-uy2*0.15, class:'entr-line','stroke-width':0.06},g);
+    el('path',{d:`M ${tip.x} ${tip.y} L ${tip.x-ux2*0.22-uy2*0.1} ${tip.y-uy2*0.22+ux2*0.1} L ${tip.x-ux2*0.22+uy2*0.1} ${tip.y-uy2*0.22-ux2*0.1} Z`, class:'entr-head'},g);
+    const txt = el('text',{x:gx+en.text[0], y:gy+en.text[1], class:'entr','font-size':0.32},g);
+    txt.textContent = en.label;
+  }
+
+  // прев'ю нової стіни
+  if(ghost && ghost.type==='wall'){
+    el('line',{x1:ghost.x1,y1:ghost.y1,x2:ghost.x2,y2:ghost.y2, stroke:'var(--accent)','stroke-width':INT_T, opacity:0.55,'stroke-linecap':'square'},g);
+    const mx=(ghost.x1+ghost.x2)/2, my=(ghost.y1+ghost.y2)/2;
+    const t=el('text',{x:mx,y:my-0.18,class:'len-label','font-size':0.3},g);
+    t.textContent = Math.hypot(ghost.x2-ghost.x1, ghost.y2-ghost.y1).toFixed(2)+' м';
+  }
+  if(ghost && ghost.type==='door'){
+    const w=ghost.w0;
+    const L=wallLen(w), ux=(w.x2-w.x1)/L, uy=(w.y2-w.y1)/L;
+    const cx=w.x1+ux*ghost.t*L, cy=w.y1+uy*ghost.t*L, h=0.4;
+    el('line',{x1:cx-ux*h,y1:cy-uy*h,x2:cx+ux*h,y2:cy+uy*h, stroke:'var(--accent)','stroke-width':w.t+0.04, opacity:0.5},g);
+  }
+  if(drawStart && !ghost){
+    el('circle',{cx:drawStart.x, cy:drawStart.y, r:0.07, fill:'var(--accent)'},g);
+  }
+
+  // вибрана стіна: ручки + довжина
+  if(sel && sel.type==='wall'){
+    const w = wallById(sel.id);
+    if(w){
+      const mx=(w.x1+w.x2)/2, my=(w.y1+w.y2)/2;
+      const t=el('text',{x:mx,y:my-0.2,class:'len-label','font-size':0.3},g);
+      t.textContent = wallLen(w).toFixed(2)+' м';
+      el('circle',{cx:w.x1,cy:w.y1,r:8/view.s, class:'handle','stroke-width':2/view.s,'data-handle':1},g);
+      el('circle',{cx:w.x2,cy:w.y2,r:8/view.s, class:'handle','stroke-width':2/view.s,'data-handle':2},g);
+    }
+  }
+
+  // маркер прив'язки
+  if(snapMark){
+    const r=6/view.s;
+    el('line',{x1:snapMark.x-r,y1:snapMark.y,x2:snapMark.x+r,y2:snapMark.y, class:'snapmark','stroke-width':1.5/view.s},g);
+    el('line',{x1:snapMark.x,y1:snapMark.y-r,x2:snapMark.x,y2:snapMark.y+r, class:'snapmark','stroke-width':1.5/view.s},g);
+  }
+}
+
+/* ---------------- кнопки / підказки ---------------- */
+const HINTS = {
+  select:'Клік — вибрати стіну чи двері. Тягни стіну або її кінці. Подвійний клік по дверях — перевернути. Del — видалити. Порожнє місце — панорамування, колесо — масштаб.',
+  wall:  'Клік — початок стіни, другий клік — кінець. Прив\'язка до кутів, стін і сітки 5 см. Esc — вийти.',
+  door:  'Клікни по стіні, щоб поставити двері (потім їх можна тягнути вздовж стіни). Esc — вийти.',
+};
+function updateButtons(){
+  document.getElementById('bUndo').disabled = histIdx<=0;
+  document.getElementById('bRedo').disabled = histIdx>=history.length-1;
+  document.getElementById('bDelete').disabled = !sel;
+  for(const [id,m] of [['bSelect','select'],['bWall','wall'],['bDoor','door']])
+    document.getElementById(id).classList.toggle('active', mode===m);
+  svg.classList.toggle('mode-wall', mode==='wall');
+  svg.classList.toggle('mode-door', mode==='door');
+  document.getElementById('hint').textContent = HINTS[mode];
+}
+function setMode(m){
+  mode=m; drawStart=null; ghost=null; snapMark=null;
+  if(m!=='select') sel=null;
+  updateButtons(); render();
+}
+function deleteSel(){
+  if(!sel) return;
+  if(sel.type==='wall'){
+    state.walls = state.walls.filter(w=>w.id!==sel.id);
+    state.doors = state.doors.filter(d=>d.wall!==sel.id);
+  } else {
+    state.doors = state.doors.filter(d=>d.id!==sel.id);
+  }
+  sel=null; commit();
+}
+
+/* ---------------- вписати в екран ---------------- */
+function fit(){
+  const r = svg.getBoundingClientRect();
+  let minX=1e9,minY=1e9,maxX=-1e9,maxY=-1e9;
+  for(const c of CONTOUR){ minX=Math.min(minX,c[0]); minY=Math.min(minY,c[1]); maxX=Math.max(maxX,c[0]); maxY=Math.max(maxY,c[1]); }
+  const pad=1.2;
+  minX-=pad; minY-=pad; maxX+=pad; maxY+=pad;
+  view.s = Math.min(r.width/(maxX-minX), r.height/(maxY-minY));
+  view.x = (r.width - (maxX+minX)*view.s)/2;
+  view.y = (r.height - (maxY+minY)*view.s)/2;
+  render();
+}
+
+/* ---------------- вказівник ---------------- */
+const pointers = new Map();
+let pinch = null;
+
+svg.addEventListener('pointerdown', e=>{
+  svg.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, {x:e.clientX, y:e.clientY});
+  if(pointers.size===2){
+    const [a,b]=[...pointers.values()];
+    pinch = {d:Math.hypot(a.x-b.x,a.y-b.y), s:view.s,
+             cx:(a.x+b.x)/2, cy:(a.y+b.y)/2, vx:view.x, vy:view.y};
+    drag=null; return;
+  }
+  const p = eventWorld(e);
+  if(e.button===1 || e.button===2 || e.shiftKey){
+    drag={type:'pan', sx:e.clientX, sy:e.clientY, vx:view.x, vy:view.y};
+    return;
+  }
+  if(mode==='wall'){
+    const q = snapPoint(p);
+    if(!drawStart){ drawStart={x:q.x,y:q.y}; snapMark=q; render(); }
+    else {
+      const nw={id:uid('w'), x1:drawStart.x, y1:drawStart.y, x2:q.x, y2:q.y, t:INT_T};
+      if(wallLen(nw)>=0.15){ state.walls.push(nw); drawStart=null; ghost=null; commit(); }
+    }
+    return;
+  }
+  if(mode==='door'){
+    const nb = nearestWall(p);
+    if(nb){
+      state.doors.push({id:uid('d'), wall:nb.wall.id, t:nb.t, w:0.8, side:1, hinge:0});
+      ghost=null; commit();
+    }
+    return;
+  }
+  // select
+  const hit = pick(p);
+  if(hit && hit.type==='handle'){
+    const w=wallById(hit.id);
+    drag={type:'endpoint', id:hit.id, end:hit.end,
+          other: hit.end===1? {x:w.x2,y:w.y2} : {x:w.x1,y:w.y1}, moved:false};
+  } else if(hit && hit.type==='wall'){
+    sel={type:'wall', id:hit.id};
+    const w=wallById(hit.id);
+    drag={type:'wall', id:hit.id, start:p, orig:{x1:w.x1,y1:w.y1,x2:w.x2,y2:w.y2}, moved:false};
+    updateButtons(); render();
+  } else if(hit && hit.type==='door'){
+    const now = performance.now();
+    if(lastDoorTap && lastDoorTap.id===hit.id && now-lastDoorTap.t<400){
+      lastDoorTap=null; flipDoor(hit.id); return;
+    }
+    lastDoorTap={id:hit.id, t:now};
+    sel={type:'door', id:hit.id};
+    drag={type:'door', id:hit.id, moved:false};
+    updateButtons(); render();
+  } else {
+    drag={type:'pan', sx:e.clientX, sy:e.clientY, vx:view.x, vy:view.y, maybeDeselect:true};
+  }
+});
+
+svg.addEventListener('pointermove', e=>{
+  if(pointers.has(e.pointerId)) pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(pinch && pointers.size===2){
+    const [a,b]=[...pointers.values()];
+    const d=Math.hypot(a.x-b.x,a.y-b.y);
+    const k=d/pinch.d;
+    const r=svg.getBoundingClientRect();
+    const cx=(a.x+b.x)/2-r.left, cy=(a.y+b.y)/2-r.top;
+    view.s=Math.max(15,Math.min(400,pinch.s*k));
+    view.x=cx-((pinch.cx-r.left-pinch.vx)/pinch.s)*view.s;
+    view.y=cy-((pinch.cy-r.top-pinch.vy)/pinch.s)*view.s;
+    render(); return;
+  }
+  const p = eventWorld(e);
+  if(drag){
+    if(drag.type==='pan'){
+      const dx=e.clientX-drag.sx, dy=e.clientY-drag.sy;
+      if(Math.hypot(dx,dy)>3) drag.moved=true;
+      view.x=drag.vx+dx; view.y=drag.vy+dy;
+      if(drag.moved){ svg.classList.add('panning'); render(); }
+      return;
+    }
+    if(drag.type==='wall'){
+      const w=wallById(drag.id); if(!w) return;
+      let dx=p.x-drag.start.x, dy=p.y-drag.start.y;
+      dx=Math.round(dx/GRID)*GRID; dy=Math.round(dy/GRID)*GRID;
+      if(dx!==0||dy!==0) drag.moved=true;
+      w.x1=drag.orig.x1+dx; w.y1=drag.orig.y1+dy;
+      w.x2=drag.orig.x2+dx; w.y2=drag.orig.y2+dy;
+      render(); return;
+    }
+    if(drag.type==='endpoint'){
+      const w=wallById(drag.id); if(!w) return;
+      const q=snapPoint(p,{excludeWall:drag.id, fixedOther:drag.other});
+      drag.moved=true; snapMark=q;
+      if(drag.end===1){ w.x1=q.x; w.y1=q.y; } else { w.x2=q.x; w.y2=q.y; }
+      render(); return;
+    }
+    if(drag.type==='door'){
+      const d=state.doors.find(x=>x.id===drag.id); if(!d) return;
+      const w=wallById(d.wall); if(!w) return;
+      const q=projectToSeg(p,w.x1,w.y1,w.x2,w.y2);
+      const L=wallLen(w), margin=(d.w/2+0.05)/L;
+      d.t=Math.max(margin,Math.min(1-margin,q.t));
+      drag.moved=true; render(); return;
+    }
+  }
+  // без перетягування: прев'ю та hover
+  if(mode==='wall' && drawStart){
+    const q=snapPoint(p); snapMark=q;
+    ghost={type:'wall', x1:drawStart.x,y1:drawStart.y,x2:q.x,y2:q.y};
+    render(); return;
+  }
+  if(mode==='door'){
+    const nb=nearestWall(p);
+    ghost = nb? {type:'door', w0:nb.wall, t:nb.t} : null;
+    render(); return;
+  }
+  if(mode==='select'){
+    const hit=pick(p);
+    const h = hit && hit.type==='wall' ? hit.id : null;
+    if(h!==hoverId){ hoverId=h; render(); }
+  }
+});
+
+function endPointer(e){
+  pointers.delete(e.pointerId);
+  if(pointers.size<2) pinch=null;
+  svg.classList.remove('panning');
+  if(!drag) return;
+  const d=drag; drag=null; snapMark=null;
+  if(d.type==='pan'){
+    if(!d.moved && d.maybeDeselect){ sel=null; updateButtons(); render(); }
+    return;
+  }
+  if(d.moved) commit(); else render();
+}
+svg.addEventListener('pointerup', endPointer);
+svg.addEventListener('pointercancel', endPointer);
+svg.addEventListener('contextmenu', e=>e.preventDefault());
+
+// подвійний клік/тап по дверях — перевернути (4 положення: сторона × петлі)
+function flipDoor(id){
+  const d = state.doors.find(x=>x.id===id);
+  if(!d) return;
+  const idx = ((d.side>0?2:0) + (d.hinge?1:0) + 1) % 4;
+  d.side = (idx & 2) ? 1 : -1;
+  d.hinge = idx & 1;
+  sel = {type:'door', id:d.id};
+  commit();
+}
+
+svg.addEventListener('wheel', e=>{
+  e.preventDefault();
+  const r=svg.getBoundingClientRect();
+  const mx=e.clientX-r.left, my=e.clientY-r.top;
+  const k=Math.exp(-e.deltaY*0.0012);
+  const ns=Math.max(15,Math.min(400,view.s*k));
+  view.x=mx-((mx-view.x)/view.s)*ns;
+  view.y=my-((my-view.y)/view.s)*ns;
+  view.s=ns;
+  render();
+},{passive:false});
+
+/* ---------------- клавіатура ---------------- */
+document.addEventListener('keydown', e=>{
+  if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT') return;
+  const k=e.key.toLowerCase();
+  if((e.ctrlKey||e.metaKey)&&k==='z'){ e.preventDefault(); e.shiftKey? redo():undo(); return; }
+  if((e.ctrlKey||e.metaKey)&&k==='y'){ e.preventDefault(); redo(); return; }
+  if(k==='delete'||k==='backspace'){ e.preventDefault(); deleteSel(); return; }
+  if(k==='escape'){
+    if(drawStart||ghost){ drawStart=null; ghost=null; snapMark=null; render(); }
+    else if(mode!=='select') setMode('select');
+    else { sel=null; updateButtons(); render(); }
+    return;
+  }
+  if(k==='v') setMode('select');
+  if(k==='w') setMode('wall');
+  if(k==='d') setMode('door');
+  if(k==='f') fit();
+});
+
+/* ---------------- варіанти ---------------- */
+const VKEY='kvartura_variants';
+function variants(){ return load(VKEY)||{}; }
+function refreshVariants(){
+  const s=document.getElementById('variantSel');
+  const cur=s.value;
+  s.innerHTML='<option value="">— варіанти —</option>';
+  for(const name of Object.keys(variants())){
+    const o=document.createElement('option'); o.value=o.textContent=name; s.appendChild(o);
+  }
+  s.value = Object.keys(variants()).includes(cur)? cur : '';
+  document.getElementById('bDelVar').disabled = !s.value;
+}
+document.getElementById('bSaveVar').onclick=()=>{
+  const name=prompt('Назва варіанта:', 'Варіант '+(Object.keys(variants()).length+1));
+  if(!name) return;
+  const v=variants(); v[name]=deepCopy(state); store(VKEY,v);
+  refreshVariants();
+  document.getElementById('variantSel').value=name;
+  document.getElementById('bDelVar').disabled=false;
+};
+document.getElementById('variantSel').onchange=e=>{
+  const v=variants()[e.target.value];
+  document.getElementById('bDelVar').disabled=!e.target.value;
+  if(v) replaceState(v);
+};
+document.getElementById('bDelVar').onclick=()=>{
+  const s=document.getElementById('variantSel');
+  if(!s.value) return;
+  if(!confirm(`Видалити варіант «${s.value}»?`)) return;
+  const v=variants(); delete v[s.value]; store(VKEY,v); refreshVariants();
+};
+document.getElementById('bReset').onclick=()=>{
+  if(confirm('Повернути початковий план з PDF? Поточні зміни можна буде скасувати через ↶.'))
+    replaceState(ORIGINAL);
+};
+
+/* ---------------- експорт/імпорт ---------------- */
+document.getElementById('bExport').onclick=()=>{
+  const blob=new Blob([JSON.stringify({contour:CONTOUR, ...state}, null, 1)],{type:'application/json'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob); a.download='finlandia21b-plan.json'; a.click();
+  URL.revokeObjectURL(a.href);
+};
+document.getElementById('bImport').onclick=()=>document.getElementById('importFile').click();
+document.getElementById('importFile').onchange=e=>{
+  const f=e.target.files[0]; if(!f) return;
+  f.text().then(txt=>{
+    try{
+      const j=JSON.parse(txt);
+      if(!Array.isArray(j.walls)) throw 0;
+      replaceState({walls:j.walls, doors:j.doors||[]});
+    }catch(_){ alert('Не вдалося прочитати файл — це не план у форматі JSON.'); }
+  });
+  e.target.value='';
+};
+
+/* ---------------- панель інструментів ---------------- */
+document.getElementById('bSelect').onclick=()=>setMode('select');
+document.getElementById('bWall').onclick=()=>setMode('wall');
+document.getElementById('bDoor').onclick=()=>setMode('door');
+document.getElementById('bDelete').onclick=deleteSel;
+document.getElementById('bUndo').onclick=undo;
+document.getElementById('bRedo').onclick=redo;
+document.getElementById('bFit').onclick=fit;
+window.addEventListener('resize', fit);
+
+/* ---------------- тестовий інтерфейс ---------------- */
+window.__test = {
+  get state(){ return deepCopy(state); },
+  get rooms(){ return deepCopy(rooms); },
+  get view(){ return {...view}; },
+  get mode(){ return mode; },
+  get sel(){ return sel? {...sel} : null; },
+  get histIdx(){ return histIdx; },
+  get histLen(){ return history.length; },
+  toScreen(p){ const r=svg.getBoundingClientRect(); const q=toScreen(p); return {x:q.x+r.left, y:q.y+r.top}; },
+  reset(){ localStorage.clear(); replaceState(ORIGINAL); refreshVariants(); },
+};
+
+/* ---------------- старт ---------------- */
+refreshVariants();
+computeRooms();
+updateButtons();
+fit();
+</script>
+</body>
+</html>
