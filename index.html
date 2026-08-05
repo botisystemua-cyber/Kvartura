@@ -77,7 +77,8 @@
   </span>
   <span class="group">
     <select id="variantSel" title="Збережені варіанти планування"><option value="">— варіанти —</option></select>
-    <button id="bSaveVar" title="Зберегти поточний стан як варіант">💾 Зберегти</button>
+    <button id="bSaveVar" title="Зберегти варіант у цьому браузері">💾 Зберегти</button>
+    <button id="bCloudSave" title="Зберегти проект файлом у GitHub — буде видно з усіх пристроїв">☁ У GitHub</button>
     <button id="bDelVar" title="Видалити вибраний варіант" disabled>✕</button>
     <button id="bReset" title="Повернути початковий план з PDF">⟲ План з PDF</button>
   </span>
@@ -95,6 +96,23 @@
   <span class="hint" id="hint"></span>
   <span class="sum" id="sum"></span>
 </footer>
+
+<dialog id="tokenDlg">
+  <h3 style="margin-bottom:8px">☁ Доступ до GitHub</h3>
+  <p style="margin-bottom:8px">Щоб зберігати проекти в GitHub, потрібен твій токен доступу (налаштовується один раз):</p>
+  <ol style="margin:0 0 10px 18px; line-height:1.6">
+    <li><a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Створити токен на GitHub ↗</a></li>
+    <li>Repository access → <b>Only select repositories</b> → <b>Kvartura</b></li>
+    <li>Permissions → Contents → <b>Read and write</b></li>
+    <li>Натисни <b>Generate token</b> і скопіюй його сюди:</li>
+  </ol>
+  <input id="tokenInput" type="password" placeholder="github_pat_…" style="width:100%; padding:8px; border:1px solid var(--line); border-radius:8px; margin-bottom:10px">
+  <div style="display:flex; gap:8px; justify-content:flex-end">
+    <button id="tokenCancel">Скасувати</button>
+    <button id="tokenSave" style="background:var(--accent-soft); border-color:var(--accent); color:var(--accent); font-weight:600">Зберегти</button>
+  </div>
+  <p style="margin-top:10px; font-size:12px; color:#5b6472">Токен зберігається лише у твоєму браузері і нікуди більше не передається.</p>
+</dialog>
 
 <script>
 'use strict';
@@ -131,15 +149,17 @@ const ORIGINAL = {
     {id:'w9',  x1:7.42, y1:6.78, x2:7.42,  y2:10.03,t:INT_T}, // кухня / тамбур і комора
     {id:'w10', x1:7.42, y1:8.48, x2:11.64, y2:8.48, t:INT_T}, // тамбур / санвузол 2
     {id:'w11', x1:8.66, y1:8.48, x2:8.66,  y2:10.03,t:INT_T}, // комора / санвузол 2
+    {id:'w12', x1:7.32, y1:6.25, x2:7.32,  y2:6.85, t:0.45},  // вент. шахта біля кухні (чорний квадрат на PDF)
+    {id:'w13', x1:3.55, y1:6.78, x2:3.55,  y2:7.55, t:INT_T}, // простінок біля дверей спальні 3
   ],
   doors: [
     {id:'d1', wall:'w2',  t:0.50, w:0.85, side: 1, hinge:0}, // у спальню 1
     {id:'d2', wall:'w3',  t:0.87, w:0.85, side: 1, hinge:1}, // у спальню 2
     {id:'d3', wall:'w5',  t:0.19, w:0.95, side:-1, hinge:0}, // салон → коридор
     {id:'d4', wall:'w6',  t:0.38, w:0.70, side: 1, hinge:0}, // санвузол 1
-    {id:'d5', wall:'w7',  t:0.376,w:0.85, side: 1, hinge:1}, // у спальню 3
+    {id:'d5', wall:'w7',  t:0.391,w:0.80, side: 1, hinge:1}, // у спальню 3 (біля простінка, як на PDF)
     {id:'d6', wall:'w7',  t:0.606,w:1.30, side: 1, hinge:0}, // прохід на кухню
-    {id:'d7', wall:'w7',  t:0.948,w:0.70, side: 1, hinge:0}, // прохід у тамбур
+    {id:'d7', wall:'w7',  t:0.880,w:0.75, side: 1, hinge:0}, // у тамбур (x≈9.0, як на PDF)
     {id:'d8', wall:'w10', t:0.15, w:0.70, side: 1, hinge:0}, // комора
     {id:'d9', wall:'w10', t:0.505,w:0.70, side: 1, hinge:1}, // санвузол 2
   ],
@@ -147,7 +167,7 @@ const ORIGINAL = {
     {id:'l1',  x:4.50,  y:3.35, text:'Салон'},
     {id:'l2',  x:7.57,  y:1.20, text:'Спальня 1'},
     {id:'l3',  x:10.30, y:1.60, text:'Спальня 2'},
-    {id:'l4',  x:10.93, y:4.72, text:'Коридор'},
+    {id:'l4',  x:10.93, y:4.72, text:'Хол'},
     {id:'l5',  x:10.93, y:6.82, text:'Ванна'},
     {id:'l6',  x:2.20,  y:7.95, text:'Спальня 3'},
     {id:'l7',  x:5.93,  y:7.95, text:'Кухня'},
@@ -159,6 +179,18 @@ const ORIGINAL = {
 
 const LABEL_PRESETS = ['Кімната','Спальня','Вітальня','Кухня','Ванна','Туалет','Санвузол',
                        'Комора','Коридор','Передпокій','Гардероб','Балкон','Свій текст…'];
+
+// Вікна на зовнішньому контурі (з PDF; декоративні, як і контур — не редагуються)
+const WINDOWS = [
+  {x:0.60, y:1.70, ux:0.7071, uy:-0.7071, len:0.80}, // діагональ, нижнє
+  {x:1.80, y:0.50, ux:0.7071, uy:-0.7071, len:0.80}, // діагональ, верхнє
+  {x:0.00, y:3.90, ux:0, uy:1, len:1.05},            // ліва стіна, салон
+  {x:0.00, y:7.45, ux:0, uy:1, len:0.95},            // ліва стіна, спальня 3
+  {x:3.70, y:0.00, ux:1, uy:0, len:1.05},            // верх, салон
+  {x:7.55, y:0.00, ux:1, uy:0, len:1.00},            // верх, спальня 1
+  {x:10.40,y:0.00, ux:1, uy:0, len:1.00},            // верх, спальня 2
+  {x:11.95,y:1.70, ux:0, uy:1, len:1.00},            // права стіна, спальня 2
+];
 
 const ENTRANCES = [
   {label:'Вхід 1', gapAt:[1.15,1.15], along:[0.7071,-0.7071], gap:0.95, arrowFrom:[-0.55,-0.55], text:[-1.35,-0.70]},
@@ -431,6 +463,19 @@ function render(){
 
   // зовнішній контур
   el('path',{d:dPath, fill:'none', stroke:'var(--wall)','stroke-width':EXT_T,'stroke-linejoin':'miter'},g);
+
+  // вікна (біла пройма + дві тонкі лінії скла)
+  for(const wd of WINDOWS){
+    const h=wd.len/2, nx=-wd.uy, ny=wd.ux;
+    const a={x:wd.x-wd.ux*h, y:wd.y-wd.uy*h}, b={x:wd.x+wd.ux*h, y:wd.y+wd.uy*h};
+    el('line',{x1:a.x,y1:a.y,x2:b.x,y2:b.y, stroke:'#f6f3ea','stroke-width':EXT_T+0.02,'stroke-linecap':'butt'},g);
+    for(const off of [-0.055, 0.055])
+      el('line',{x1:a.x+nx*off,y1:a.y+ny*off,x2:b.x+nx*off,y2:b.y+ny*off,
+                 stroke:'var(--wall)','stroke-width':0.035,'stroke-linecap':'butt'},g);
+    for(const p of [a,b])
+      el('line',{x1:p.x-nx*EXT_T/2,y1:p.y-ny*EXT_T/2,x2:p.x+nx*EXT_T/2,y2:p.y+ny*EXT_T/2,
+                 stroke:'var(--wall)','stroke-width':0.04,'stroke-linecap':'butt'},g);
+  }
 
   // двері
   const gDoors = el('g',{},g);
@@ -894,6 +939,113 @@ const PRESET_VARIANTS = {
 }),
 };
 
+/* ---------------- проекти в GitHub ---------------- */
+const GH = {owner:'botisystemua-cyber', repo:'Kvartura', dir:'variants'};
+let ghToken = load('kvartura_gh_token');
+let cloudVariants = {};        // назва -> {sha}
+let pendingCloudSave = false;
+
+function ghHeaders(){
+  const h = {Accept:'application/vnd.github+json'};
+  if(ghToken) h.Authorization = 'Bearer '+ghToken;
+  return h;
+}
+function ghPath(name){
+  return `https://api.github.com/repos/${GH.owner}/${GH.repo}/contents/${GH.dir}/${encodeURIComponent(name)}.json`;
+}
+function b64utf8(str){
+  const bytes = new TextEncoder().encode(str);
+  let bin = '';
+  for(let i=0;i<bytes.length;i+=0x8000)
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i+0x8000));
+  return btoa(bin);
+}
+async function cloudList(){
+  try{
+    const r = await fetch(`https://api.github.com/repos/${GH.owner}/${GH.repo}/contents/${GH.dir}`,
+                          {headers:ghHeaders(), cache:'no-store'});
+    if(r.status===404){ cloudVariants={}; refreshVariants(); return; }
+    if(!r.ok) return;
+    const arr = await r.json();
+    cloudVariants = {};
+    for(const f of arr)
+      if(f.name.endsWith('.json')) cloudVariants[f.name.slice(0,-5)] = {sha:f.sha};
+    refreshVariants();
+  }catch(e){ /* без інтернету — просто без хмарного списку */ }
+}
+async function cloudLoad(name){
+  try{
+    const r = await fetch(ghPath(name), {headers:{Accept:'application/vnd.github.raw+json'}, cache:'no-store'});
+    if(!r.ok){ alert('Не вдалося завантажити проект з GitHub ('+r.status+')'); return; }
+    const j = await r.json();
+    if(!Array.isArray(j.walls)) throw 0;
+    replaceState({walls:j.walls, doors:j.doors||[], labels:j.labels||[]});
+    document.getElementById('hint').textContent = '☁ Відкрито проект з GitHub: '+name;
+  }catch(e){ alert('Файл проекту пошкоджений або має інший формат.'); }
+}
+function badToken(){
+  ghToken = null;
+  try{ localStorage.removeItem('kvartura_gh_token'); }catch(e){}
+  alert('Токен не спрацював — GitHub відхилив запит. Введи токен ще раз.');
+  document.getElementById('tokenDlg').showModal();
+}
+async function cloudSave(){
+  if(!ghToken){
+    pendingCloudSave = true;
+    document.getElementById('tokenDlg').showModal();
+    return;
+  }
+  const cur = document.getElementById('variantSel').value;
+  const def = cur.startsWith('gh:') ? cur.slice(3) : 'Проект '+(Object.keys(cloudVariants).length+1);
+  let name = prompt('Назва проекту (файл у GitHub):', def);
+  if(!name) return;
+  name = name.replace(/[\\/:*?"<>|#%]/g,' ').replace(/\s+/g,' ').trim().slice(0,60);
+  if(!name) return;
+  if(cloudVariants[name] && !confirm(`Проект «${name}» вже є в GitHub. Перезаписати?`)) return;
+  const body = {
+    message: 'Проект планування: '+name,
+    content: b64utf8(JSON.stringify({contour:CONTOUR, ...state}, null, 1)),
+  };
+  if(cloudVariants[name]) body.sha = cloudVariants[name].sha;
+  let r;
+  try{
+    r = await fetch(ghPath(name), {method:'PUT', headers:ghHeaders(), body:JSON.stringify(body)});
+  }catch(e){ alert('Немає з\'єднання з GitHub.'); return; }
+  if(r.status===401 || r.status===403){ badToken(); return; }
+  if(!r.ok){ alert('Не вдалося зберегти ('+r.status+').'); return; }
+  await cloudList();
+  document.getElementById('variantSel').value = 'gh:'+name;
+  document.getElementById('bDelVar').disabled = false;
+  document.getElementById('hint').textContent = '☁ Збережено в GitHub: '+name+' ✓';
+}
+async function cloudDelete(name){
+  if(!ghToken){ document.getElementById('tokenDlg').showModal(); return; }
+  if(!cloudVariants[name]) return;
+  if(!confirm(`Видалити проект «${name}» з GitHub?`)) return;
+  let r;
+  try{
+    r = await fetch(ghPath(name), {method:'DELETE', headers:ghHeaders(),
+        body:JSON.stringify({message:'Видалити проект: '+name, sha:cloudVariants[name].sha})});
+  }catch(e){ alert('Немає з\'єднання з GitHub.'); return; }
+  if(r.status===401 || r.status===403){ badToken(); return; }
+  if(!r.ok){ alert('Не вдалося видалити ('+r.status+').'); return; }
+  await cloudList();
+}
+document.getElementById('bCloudSave').onclick = cloudSave;
+document.getElementById('tokenSave').onclick = ()=>{
+  const v = document.getElementById('tokenInput').value.trim();
+  if(!v) return;
+  ghToken = v; store('kvartura_gh_token', v);
+  document.getElementById('tokenInput').value='';
+  document.getElementById('tokenDlg').close();
+  cloudList();
+  if(pendingCloudSave){ pendingCloudSave=false; cloudSave(); }
+};
+document.getElementById('tokenCancel').onclick = ()=>{
+  pendingCloudSave = false;
+  document.getElementById('tokenDlg').close();
+};
+
 /* ---------------- варіанти ---------------- */
 const VKEY='kvartura_variants';
 function variants(){ return load(VKEY)||{}; }
@@ -906,15 +1058,23 @@ function refreshVariants(){
     const o=document.createElement('option'); o.value=o.textContent=name; g1.appendChild(o);
   }
   s.appendChild(g1);
+  const cloud=Object.keys(cloudVariants);
+  if(cloud.length){
+    const gc=document.createElement('optgroup'); gc.label='☁ Проекти (GitHub)';
+    for(const name of cloud){
+      const o=document.createElement('option'); o.value='gh:'+name; o.textContent='☁ '+name; gc.appendChild(o);
+    }
+    s.appendChild(gc);
+  }
   const mine=Object.keys(variants());
   if(mine.length){
-    const g2=document.createElement('optgroup'); g2.label='Мої варіанти';
+    const g2=document.createElement('optgroup'); g2.label='Мої варіанти (цей браузер)';
     for(const name of mine){
       const o=document.createElement('option'); o.value=o.textContent=name; g2.appendChild(o);
     }
     s.appendChild(g2);
   }
-  const all=[...Object.keys(PRESET_VARIANTS), ...mine];
+  const all=[...Object.keys(PRESET_VARIANTS), ...cloud.map(n=>'gh:'+n), ...mine];
   s.value = all.includes(cur)? cur : '';
   document.getElementById('bDelVar').disabled = !s.value || !!PRESET_VARIANTS[s.value];
 }
@@ -929,13 +1089,15 @@ document.getElementById('bSaveVar').onclick=()=>{
 };
 document.getElementById('variantSel').onchange=e=>{
   const name=e.target.value;
-  const v = PRESET_VARIANTS[name] || variants()[name];
   document.getElementById('bDelVar').disabled = !name || !!PRESET_VARIANTS[name];
+  if(name.startsWith('gh:')){ cloudLoad(name.slice(3)); return; }
+  const v = PRESET_VARIANTS[name] || variants()[name];
   if(v) replaceState(v);
 };
 document.getElementById('bDelVar').onclick=()=>{
   const s=document.getElementById('variantSel');
   if(!s.value) return;
+  if(s.value.startsWith('gh:')){ cloudDelete(s.value.slice(3)); return; }
   if(!confirm(`Видалити варіант «${s.value}»?`)) return;
   const v=variants(); delete v[s.value]; store(VKEY,v); refreshVariants();
 };
@@ -992,6 +1154,7 @@ refreshVariants();
 computeRooms();
 updateButtons();
 fit();
+cloudList();
 </script>
 </body>
 </html>
