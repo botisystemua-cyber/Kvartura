@@ -118,6 +118,7 @@
     <button id="bReset" title="Повернути актуальний план (після ремонту)">⟲ Актуальний план</button>
   </span>
   <span class="group">
+    <button id="bPdf" title="Роздрукувати план або зберегти його як PDF">🖨 PDF</button>
     <button id="bExport" title="Завантажити план як JSON-файл">⇩ Експорт</button>
     <button id="bImport" title="Відкрити план із JSON-файлу">⇧ Імпорт</button>
     <input type="file" id="importFile" accept=".json" hidden>
@@ -1640,6 +1641,46 @@ document.getElementById('bReset').onclick=()=>{
 };
 
 /* ---------------- експорт/імпорт ---------------- */
+document.getElementById('bPdf').onclick=()=>{
+  // чистий кадр: без вибору, привидів і допоміжних позначок
+  const oldSel=sel, oldGhost=ghost, oldSnap=snapMark, oldHover=hoverId;
+  sel=null; ghost=null; snapMark=null; hoverId=null; render();
+  const clone = svg.cloneNode(true);
+  sel=oldSel; ghost=oldGhost; snapMark=oldSnap; hoverId=oldHover; render();
+
+  const gRoot = clone.querySelector('g');
+  if(gRoot) gRoot.removeAttribute('transform');       // друк у світових координатах
+  const pad=0.8;
+  let minX=CONTOUR[0][0],maxX=minX,minY=CONTOUR[0][1],maxY=minY;
+  for(const c of CONTOUR){
+    minX=Math.min(minX,c[0]); maxX=Math.max(maxX,c[0]);
+    minY=Math.min(minY,c[1]); maxY=Math.max(maxY,c[1]);
+  }
+  clone.setAttribute('viewBox', `${minX-pad} ${minY-pad} ${maxX-minX+2*pad} ${maxY-minY+2*pad}`);
+  clone.removeAttribute('id'); clone.removeAttribute('style');
+
+  const css=[...document.querySelectorAll('style')].map(s=>s.textContent).join('\n');
+  const totals=document.getElementById('sum')?.textContent||'';
+  const w=window.open('','_blank');
+  if(!w){ alert('Браузер заблокував вікно друку. Дозволь спливні вікна для цього сайту і спробуй ще раз.'); return; }
+  w.document.write(`<!doctype html><html lang="uk"><head><meta charset="utf-8">
+<title>Finlandia 21B — план</title>
+<style>${css}
+@page{size:A4 landscape; margin:10mm}
+html,body{margin:0; padding:0; background:#fff; color:#111;}
+body{padding:12px 16px; font:14px/1.45 system-ui,-apple-system,sans-serif;}
+h1{font-size:18px; margin:0 0 2px; font-weight:700;}
+.meta{color:#555; font-size:12px; margin-bottom:8px;}
+svg{width:100%; height:auto; max-height:86vh; display:block;}
+@media print{ svg{max-height:none; height:170mm;} }
+</style></head><body>
+<h1>c/ Finlandia 21B, Torrevieja — план</h1>
+<div class="meta">${new Date().toLocaleDateString('uk-UA')} · ${totals}</div>
+${clone.outerHTML}
+<script>setTimeout(()=>{window.print();},400);<\/script>
+</body></html>`);
+  w.document.close();
+};
 document.getElementById('bExport').onclick=()=>{
   const blob=new Blob([JSON.stringify({contour:CONTOUR, ...state}, null, 1)],{type:'application/json'});
   const a=document.createElement('a');
