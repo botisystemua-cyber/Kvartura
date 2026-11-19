@@ -969,20 +969,43 @@ svg.addEventListener('pointerdown', e=>{
     return;
   }
   if(mode==='door'){
+    // клік по наявних дверях — вибрати/перевернути, а не ставити нові зверху
+    const hd = pick(p);
+    if(hd && hd.type==='door'){
+      const now = performance.now();
+      if(lastDoorTap && lastDoorTap.id===hd.id && now-lastDoorTap.t<400){
+        lastDoorTap=null; flipDoor(hd.id); return;
+      }
+      lastDoorTap={id:hd.id, t:now};
+      sel={type:'door', id:hd.id};
+      drag={type:'door', id:hd.id, moved:false};
+      ghost=null; updateButtons(); render();
+      return;
+    }
     const nb = nearestWall(p);
     if(nb){
       state.doors.push({id:uid('d'), wall:nb.wall.id, t:nb.t, w:0.8, side:1, hinge:0});
+      sel={type:'door', id:state.doors[state.doors.length-1].id};
       ghost=null; commit();
     }
     return;
   }
   if(mode==='window'){
+    // клік по наявному вікну — вибрати/тягнути, а не додавати нове зверху
+    const hw2 = pick(p);
+    if(hw2 && hw2.type==='window'){
+      sel={type:'window', id:hw2.id};
+      drag={type:'window', id:hw2.id, moved:false};
+      ghost=null; updateButtons(); render();
+      return;
+    }
     const nc = nearestContour(p);
     if(nc){
       const half = 0.5;
       const t = Math.max(half/nc.L, Math.min(1-half/nc.L, nc.t));
       const wx = nc.seg.x1 + (nc.seg.x2-nc.seg.x1)*t, wy = nc.seg.y1 + (nc.seg.y2-nc.seg.y1)*t;
       state.windows.push({id:uid('win'), x:wx, y:wy, ux:nc.ux, uy:nc.uy, len:1.0});
+      sel={type:'window', id:state.windows[state.windows.length-1].id};
       ghost=null; commit();
     }
     return;
