@@ -71,6 +71,15 @@
   .measure-label{fill:#b45309; text-anchor:middle; font-weight:700; paint-order:stroke; stroke:#fff; stroke-width:.09px;}
   .zone-seed{stroke:#fff; cursor:move;}
   .zone-seed-txt{fill:#fff; text-anchor:middle; font-weight:700; pointer-events:none;}
+  #furnBar{position:absolute; top:10px; left:10px; z-index:4; background:var(--panel);
+    border:1px solid var(--line); border-radius:10px; padding:8px; display:flex; flex-wrap:wrap;
+    gap:4px; max-width:380px; box-shadow:0 2px 8px rgba(0,0,0,.08);}
+  #furnBar[hidden]{display:none;}
+  #furnBar button{padding:4px 8px; font-size:13px;}
+  #furnBar button.active{background:var(--accent-soft); border-color:var(--accent); color:var(--accent); font-weight:600;}
+  .furn-el{fill:#fbf8f0; stroke:#6b7280;}
+  .furn-el.selected{stroke:var(--accent); fill:#eef4ff;}
+  .furn-detail{stroke:#9aa1ab; fill:none;}
   #labelBar button{padding:4px 8px; font-size:13px;}
   #labelBar button.active{background:var(--accent-soft); border-color:var(--accent); color:var(--accent); font-weight:600;}
   .entr{fill:var(--ok); font-weight:700; pointer-events:none;}
@@ -93,6 +102,7 @@
     <button id="bWindow" class="tool" title="Додати вікно на зовнішній стіні (N)">◫ Вікно</button>
     <button id="bRuler" class="tool" title="Лінійка: клік у дві точки — відстань (R)">📏</button>
     <button id="bZone" class="tool" title="Зони квартир A і B: клікай по кімнатах (Z)">🎨 Зони</button>
+    <button id="bFurn" class="tool" title="Меблі: вибери предмет і клікни на плані (M)">🛋 Меблі</button>
     <button id="bDelete" class="danger" title="Видалити вибране (Delete)" disabled>🗑</button>
   </span>
   <span class="group">
@@ -116,6 +126,7 @@
 <div id="stage">
   <svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg>
   <div id="labelBar" hidden></div>
+  <div id="furnBar" hidden></div>
   <div id="zoneBar" hidden>
     <b style="margin-right:4px">Зони:</b>
     <button data-z="A" class="active">Квартира A</button>
@@ -206,6 +217,22 @@ const ORIGINAL = {
   columns: [],
 };
 
+const FURN_PRESETS = [
+  {kind:'bed160',  name:'Ліжко 160×200',   w:1.60, h:2.00},
+  {kind:'bed90',   name:'Ліжко 90×200',    w:0.90, h:2.00},
+  {kind:'sofa',    name:'Диван 200×90',    w:2.00, h:0.90},
+  {kind:'wardrobe',name:'Шафа 180×60',     w:1.80, h:0.60},
+  {kind:'table',   name:'Стіл 120×80',     w:1.20, h:0.80},
+  {kind:'chair',   name:'Стілець 45×45',   w:0.45, h:0.45},
+  {kind:'kitchen', name:'Кухня 240×60',    w:2.40, h:0.60},
+  {kind:'fridge',  name:'Холодильник 60×60',w:0.60, h:0.60},
+  {kind:'bath',    name:'Ванна 170×75',    w:1.70, h:0.75},
+  {kind:'shower',  name:'Душ 90×90',       w:0.90, h:0.90},
+  {kind:'toilet',  name:'Унітаз 40×65',    w:0.40, h:0.65},
+  {kind:'sink',    name:'Умивальник 50×40',w:0.50, h:0.40},
+  {kind:'washer',  name:'Пральна 60×60',   w:0.60, h:0.60},
+];
+
 const LABEL_PRESETS = ['Кімната','Спальня','Вітальня','Кухня','Ванна','Туалет','Санвузол',
                        'Комора','Коридор','Передпокій','Гардероб','Балкон','Свій текст…'];
 
@@ -222,6 +249,7 @@ const DEFAULT_WINDOWS = [
 ];
 ORIGINAL.windows = DEFAULT_WINDOWS.map((w,i)=>({id:'win'+(i+1), ...w}));
 ORIGINAL.zones = [];
+ORIGINAL.furniture = [];
 
 const ENTRANCES = [
   {label:'Вхід 1', gapAt:[1.15,1.15], along:[0.7071,-0.7071], gap:0.95, arrowFrom:[-0.55,-0.55], text:[-1.35,-0.70]},
@@ -231,7 +259,8 @@ const ENTRANCES = [
 /* ---------------- стан ---------------- */
 function normalizeState(s){
   return {walls:s.walls||[], doors:s.doors||[], labels:s.labels||[], columns:s.columns||[],
-          windows:s.windows||deepCopy(ORIGINAL.windows), zones:s.zones||[]};
+          windows:s.windows||deepCopy(ORIGINAL.windows), zones:s.zones||[],
+          furniture:s.furniture||[]};
 }
 // Версія базового плану. Коли геометрія ORIGINAL оновлюється, старий
 // автосейв користувача зберігається у «Мої варіанти», а показується новий план.
@@ -274,6 +303,8 @@ let currentZone = 'A';         // активна квартира в режим�
 let labGrid = null;            // растрові регіони з останнього computeRooms
 let roomsOverlay = null;       // підсвітка зон (data-url картинка)
 let zoneSums = {A:0, B:0};
+let furnPreset = FURN_PRESETS[0]; // активний предмет у режимі меблів
+let lastFurnTap = null;           // подвійний клік по меблях = поворот
 
 const view = {s:60, x:40, y:40};
 const svg = document.getElementById('svg');
@@ -389,6 +420,12 @@ function pick(p){
     const m = 0.08;
     if(p.x>=b.x-m && p.x<=b.x+b.width+m && p.y>=b.y-m && p.y<=b.y+b.height+m)
       return {type:'label', id:l.id};
+  }
+  for(const f of state.furniture){
+    const hw = (f.rot||0)%2 ? f.h/2 : f.w/2;
+    const hh = (f.rot||0)%2 ? f.w/2 : f.h/2;
+    if(p.x>=f.x-hw && p.x<=f.x+hw && p.y>=f.y-hh && p.y<=f.y+hh)
+      return {type:'furn', id:f.id};
   }
   let bestWall=null;
   for(const w of state.walls){
@@ -563,6 +600,65 @@ function render(){
                 width:roomsOverlay.w, height:roomsOverlay.h, preserveAspectRatio:'none'},g);
   }
 
+  // меблі
+  const furnDetails = (gF, kind, w, h) => {
+    const D = (attrs, tag='line') => el(tag, {...attrs, class:'furn-detail', 'stroke-width':0.025}, gF);
+    switch(kind){
+      case 'bed160': case 'bed90':
+        D({x:-w/2+0.07, y:-h/2+0.07, width:w-0.14, height:0.34, rx:0.05, fill:'none'}, 'rect');
+        D({x1:-w/2, y1:-h/2+0.55, x2:w/2, y2:-h/2+0.55});
+        break;
+      case 'sofa':
+        D({x1:-w/2+0.06, y1:-h/2+0.2, x2:w/2-0.06, y2:-h/2+0.2});
+        D({x1:-w/2+0.18, y1:-h/2+0.2, x2:-w/2+0.18, y2:h/2-0.05});
+        D({x1:w/2-0.18, y1:-h/2+0.2, x2:w/2-0.18, y2:h/2-0.05});
+        break;
+      case 'wardrobe':
+        D({x1:0, y1:-h/2, x2:0, y2:h/2});
+        D({x1:-w/2, y1:0, x2:w/2, y2:0, 'stroke-dasharray':'0.06 0.05'});
+        break;
+      case 'kitchen':
+        D({cx:-w/2+0.45, cy:0, r:0.17}, 'circle');
+        for(const [dx,dy] of [[-0.14,-0.11],[0.14,-0.11],[-0.14,0.11],[0.14,0.11]])
+          D({cx:w/2-0.5+dx, cy:dy, r:0.075}, 'circle');
+        break;
+      case 'fridge':
+        D({x1:-w/2, y1:-h/2, x2:w/2, y2:h/2});
+        break;
+      case 'bath':
+        D({x:-w/2+0.09, y:-h/2+0.09, width:w-0.18, height:h-0.18, rx:0.25, fill:'none'}, 'rect');
+        D({cx:-w/2+0.33, cy:0, r:0.045}, 'circle');
+        break;
+      case 'shower':
+        D({x1:-w/2, y1:-h/2, x2:w/2, y2:h/2});
+        D({x1:w/2, y1:-h/2, x2:-w/2, y2:h/2});
+        D({cx:0, cy:0, r:0.05}, 'circle');
+        break;
+      case 'toilet':
+        D({x:-w/2, y:-h/2, width:w, height:0.16, fill:'#eceef1'}, 'rect');
+        D({cx:0, cy:0.08, rx:w/2-0.045, ry:h/2-0.14}, 'ellipse');
+        break;
+      case 'sink':
+        D({cx:0, cy:0, rx:w/2-0.07, ry:h/2-0.06}, 'ellipse');
+        break;
+      case 'washer':
+        D({cx:0, cy:0, r:0.19}, 'circle');
+        D({cx:0, cy:0, r:0.1}, 'circle');
+        break;
+    }
+  };
+  const drawFurn = (f, isSel, opacity) => {
+    const gF = el('g', {transform:`translate(${f.x} ${f.y}) rotate(${(f.rot||0)*90})`,
+                        ...(opacity?{opacity}:{})}, g);
+    el('rect',{x:-f.w/2, y:-f.h/2, width:f.w, height:f.h, rx:0.04,
+               class:'furn-el'+(isSel?' selected':''), 'stroke-width':isSel?0.05:0.03}, gF);
+    furnDetails(gF, f.kind, f.w, f.h);
+  };
+  for(const f of state.furniture)
+    drawFurn(f, sel && sel.type==='furn' && sel.id===f.id, 0);
+  if(ghost && ghost.type==='furn')
+    drawFurn({...furnPreset, x:ghost.x, y:ghost.y, rot:0}, false, 0.5);
+
   // підписи площ
   const gRooms = el('g',{},g);
   for(const r of rooms){
@@ -730,7 +826,7 @@ function render(){
 
 /* ---------------- кнопки / підказки ---------------- */
 const HINTS = {
-  select:'Клік — вибрати стіну, двері чи ярлик. Тягни стіну, її кінці або ярлик. Подвійний клік: по дверях — перевернути, по ярлику — змінити текст. Del — видалити.',
+  select:'Клік — вибрати об\'єкт. Тягни стіни, меблі, вікна, ярлики. Подвійний клік: меблі — повернути, двері — перевернути, ярлик — змінити текст. Del — видалити.',
   wall:  'Клік — початок стіни, другий клік — кінець. Прив\'язка до кутів, стін і сітки 5 см. Esc — вийти.',
   door:  'Клікни по стіні, щоб поставити двері (потім їх можна тягнути вздовж стіни). Esc — вийти.',
   label: 'Вибери назву в палітрі й клікни на плані, куди її поставити. «Свій текст…» — довільний напис. Esc — вийти.',
@@ -738,18 +834,20 @@ const HINTS = {
   window:'Клікни на зовнішній стіні, щоб поставити вікно. Вікна можна тягати вздовж стін і видаляти. Esc — вийти.',
   ruler: 'Клік — перша точка, другий клік — відстань лишиться на екрані. Esc — стерти виміри й вийти.',
   zone:  'Вибери квартиру вгорі і клікай по кімнатах — вони зафарбуються, площі порахуються окремо. «Стерти» — прибрати зону.',
+  furniture:'Вибери предмет угорі й клікни на плані. Потім: тягни мишею — пересунути, подвійний клік — повернути, Del — видалити.',
 };
 function updateButtons(){
   document.getElementById('bUndo').disabled = histIdx<=0;
   document.getElementById('bRedo').disabled = histIdx>=history.length-1;
   document.getElementById('bDelete').disabled = !sel;
-  for(const [id,m] of [['bSelect','select'],['bWall','wall'],['bDoor','door'],['bLabel','label'],['bColumn','column'],['bWindow','window'],['bRuler','ruler'],['bZone','zone']])
+  for(const [id,m] of [['bSelect','select'],['bWall','wall'],['bDoor','door'],['bLabel','label'],['bColumn','column'],['bWindow','window'],['bRuler','ruler'],['bZone','zone'],['bFurn','furniture']])
     document.getElementById(id).classList.toggle('active', mode===m);
   svg.classList.toggle('mode-wall', mode==='wall');
-  svg.classList.toggle('mode-door', ['door','label','column','window','ruler','zone'].includes(mode));
+  svg.classList.toggle('mode-door', ['door','label','column','window','ruler','zone','furniture'].includes(mode));
   document.getElementById('labelBar').hidden = (mode!=='label');
   document.getElementById('colBar').hidden = !(mode==='column' || (sel && sel.type==='column'));
   document.getElementById('zoneBar').hidden = (mode!=='zone');
+  document.getElementById('furnBar').hidden = (mode!=='furniture');
   document.getElementById('hint').textContent = HINTS[mode];
 }
 function setMode(m){
@@ -773,6 +871,8 @@ function deleteSel(){
     state.windows = state.windows.filter(w=>w.id!==sel.id);
   } else if(sel.type==='zone'){
     state.zones = state.zones.filter(z=>z.id!==sel.id);
+  } else if(sel.type==='furn'){
+    state.furniture = state.furniture.filter(f=>f.id!==sel.id);
   }
   sel=null; commit();
 }
@@ -861,6 +961,13 @@ svg.addEventListener('pointerdown', e=>{
     commit();
     return;
   }
+  if(mode==='furniture'){
+    state.furniture.push({id:uid('f'), x:Math.round(p.x/GRID)*GRID, y:Math.round(p.y/GRID)*GRID,
+                          w:furnPreset.w, h:furnPreset.h, rot:0, kind:furnPreset.kind});
+    sel = {type:'furn', id:state.furniture[state.furniture.length-1].id};
+    commit();
+    return;
+  }
   if(mode==='column'){
     const nc = {id:uid('c'), x:Math.round(p.x/GRID)*GRID, y:Math.round(p.y/GRID)*GRID,
                 w:colSize.w, h:colSize.h};
@@ -901,6 +1008,20 @@ svg.addEventListener('pointerdown', e=>{
     const z = state.zones.find(x=>x.id===hit.id);
     sel={type:'zone', id:hit.id};
     drag={type:'zone', id:hit.id, off:{x:p.x-z.x, y:p.y-z.y}, moved:false};
+    updateButtons(); render();
+  } else if(hit && hit.type==='furn'){
+    const f = state.furniture.find(x=>x.id===hit.id);
+    const now = performance.now();
+    if(lastFurnTap && lastFurnTap.id===hit.id && now-lastFurnTap.t<400){
+      lastFurnTap=null;
+      f.rot = ((f.rot||0)+1)%4;
+      sel={type:'furn', id:f.id};
+      commit();
+      return;
+    }
+    lastFurnTap={id:hit.id, t:now};
+    sel={type:'furn', id:hit.id};
+    drag={type:'furn', id:hit.id, off:{x:p.x-f.x, y:p.y-f.y}, moved:false};
     updateButtons(); render();
   } else if(hit && hit.type==='column'){
     const c = state.columns.find(x=>x.id===hit.id);
@@ -997,6 +1118,12 @@ svg.addEventListener('pointermove', e=>{
       z.y = Math.round((p.y-drag.off.y)/GRID)*GRID;
       drag.moved=true; render(); return;
     }
+    if(drag.type==='furn'){
+      const f=state.furniture.find(x=>x.id===drag.id); if(!f) return;
+      f.x = Math.round((p.x-drag.off.x)/GRID)*GRID;
+      f.y = Math.round((p.y-drag.off.y)/GRID)*GRID;
+      drag.moved=true; render(); return;
+    }
     if(drag.type==='column'){
       const c=state.columns.find(x=>x.id===drag.id); if(!c) return;
       c.x = Math.round((p.x-drag.off.x)/GRID)*GRID;
@@ -1031,6 +1158,10 @@ svg.addEventListener('pointermove', e=>{
   }
   if(mode==='column'){
     ghost = {type:'column', x:Math.round(p.x/GRID)*GRID, y:Math.round(p.y/GRID)*GRID};
+    render(); return;
+  }
+  if(mode==='furniture'){
+    ghost = {type:'furn', x:Math.round(p.x/GRID)*GRID, y:Math.round(p.y/GRID)*GRID};
     render(); return;
   }
   if(mode==='window'){
@@ -1117,6 +1248,7 @@ document.addEventListener('keydown', e=>{
   if(k==='n') setMode('window');
   if(k==='r') setMode('ruler');
   if(k==='z' && !e.ctrlKey && !e.metaKey) setMode('zone');
+  if(k==='m') setMode('furniture');
   if(k==='f') fit();
 });
 
@@ -1426,7 +1558,7 @@ document.getElementById('importFile').onchange=e=>{
       const j=JSON.parse(txt);
       if(!Array.isArray(j.walls)) throw 0;
       replaceState({walls:j.walls, doors:j.doors||[], labels:j.labels||[], columns:j.columns||[],
-                    windows:j.windows, zones:j.zones||[]});
+                    windows:j.windows, zones:j.zones||[], furniture:j.furniture||[]});
     }catch(_){ alert('Не вдалося прочитати файл — це не план у форматі JSON.'); }
   });
   e.target.value='';
@@ -1441,6 +1573,20 @@ document.getElementById('bColumn').onclick=()=>setMode('column');
 document.getElementById('bWindow').onclick=()=>setMode('window');
 document.getElementById('bRuler').onclick=()=>setMode('ruler');
 document.getElementById('bZone').onclick=()=>setMode('zone');
+document.getElementById('bFurn').onclick=()=>setMode('furniture');
+(function buildFurnBar(){
+  const bar=document.getElementById('furnBar');
+  for(const p of FURN_PRESETS){
+    const b=document.createElement('button');
+    b.textContent=p.name;
+    if(p===furnPreset) b.classList.add('active');
+    b.onclick=()=>{
+      furnPreset=p;
+      bar.querySelectorAll('button').forEach(x=>x.classList.toggle('active', x.textContent===p.name));
+    };
+    bar.appendChild(b);
+  }
+})();
 document.querySelectorAll('#zoneBar button').forEach(b=>{
   b.onclick=()=>{
     currentZone = b.dataset.z;
