@@ -340,6 +340,7 @@ let sel = null;                // {type:'wall'|'door', id}
 let hoverId = null;
 let drag = null;               // контекст перетягування
 let drawStart = null;          // перша точка нової стіни
+let drawPress = null;          // екранна точка натискання, щоб малювати тягненням
 let ghost = null;              // прев'ю стіни/дверей
 let snapMark = null;
 let rooms = [];
@@ -350,6 +351,7 @@ let labelBoxes = {};           // bbox ярликів з останнього р
 let colSize = {w:0.30, h:0.30}; // розмір нової колони, м
 let measures = [];             // лінійка: завершені виміри (не зберігаються)
 let rulerStart = null;         // лінійка: перша точка
+let rulerPress = null;         // екранна точка натискання лінійки (вимір тягненням)
 let currentZone = 'A';         // активна квартира в режимі зон
 let labGrid = null;            // растрові регіони з останнього computeRooms
 let roomsOverlay = null;       // підсвітка зон (data-url картинка)
@@ -952,7 +954,7 @@ svg.addEventListener('pointerdown', e=>{
     const [a,b]=[...pointers.values()];
     pinch = {d:Math.hypot(a.x-b.x,a.y-b.y), s:view.s,
              cx:(a.x+b.x)/2, cy:(a.y+b.y)/2, vx:view.x, vy:view.y};
-    drag=null; return;
+    drag=null; drawPress=null; rulerPress=null; return;
   }
   const p = eventWorld(e);
   if(e.button===1 || e.button===2 || e.shiftKey){
@@ -961,7 +963,7 @@ svg.addEventListener('pointerdown', e=>{
   }
   if(mode==='wall'){
     const q = snapPoint(p);
-    if(!drawStart){ drawStart={x:q.x,y:q.y}; snapMark=q; render(); }
+    if(!drawStart){ drawStart={x:q.x,y:q.y}; drawPress={x:e.clientX,y:e.clientY,id:e.pointerId}; snapMark=q; render(); }
     else {
       const nw={id:uid('w'), x1:drawStart.x, y1:drawStart.y, x2:q.x, y2:q.y, t:INT_T};
       if(wallLen(nw)>=0.15){ state.walls.push(nw); drawStart=null; ghost=null; commit(); }
@@ -1012,7 +1014,7 @@ svg.addEventListener('pointerdown', e=>{
   }
   if(mode==='ruler'){
     const q = snapPoint(p);
-    if(!rulerStart){ rulerStart={x:q.x,y:q.y}; snapMark=q; render(); }
+    if(!rulerStart){ rulerStart={x:q.x,y:q.y}; rulerPress={x:e.clientX,y:e.clientY,id:e.pointerId}; snapMark=q; render(); }
     else {
       measures.push({a:rulerStart, b:{x:q.x,y:q.y}});
       rulerStart=null; ghost=null; snapMark=null; render();
@@ -1264,6 +1266,25 @@ function endPointer(e){
   pointers.delete(e.pointerId);
   if(pointers.size<2) pinch=null;
   svg.classList.remove('panning');
+  // малювання тягненням: натиснув — провів — відпустив
+  if(mode==='wall' && drawStart && drawPress && drawPress.id===e.pointerId){
+    const movedPx = Math.hypot(e.clientX-drawPress.x, e.clientY-drawPress.y);
+    drawPress=null;
+    if(movedPx>8){
+      const q = snapPoint(eventWorld(e));
+      const nw={id:uid('w'), x1:drawStart.x, y1:drawStart.y, x2:q.x, y2:q.y, t:INT_T};
+      if(wallLen(nw)>=0.15){ state.walls.push(nw); drawStart=null; ghost=null; snapMark=null; commit(); }
+    }
+  }
+  if(mode==='ruler' && rulerStart && rulerPress && rulerPress.id===e.pointerId){
+    const movedPx = Math.hypot(e.clientX-rulerPress.x, e.clientY-rulerPress.y);
+    rulerPress=null;
+    if(movedPx>8){
+      const q = snapPoint(eventWorld(e));
+      measures.push({a:rulerStart, b:{x:q.x,y:q.y}});
+      rulerStart=null; ghost=null; snapMark=null; render();
+    }
+  }
   if(!drag) return;
   const d=drag; drag=null; snapMark=null;
   if(d.type==='pan'){
