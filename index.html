@@ -1674,13 +1674,62 @@ html,body{margin:0; padding:0; background:#fff; color:#111;}
 body{padding:12px 16px; font:14px/1.45 system-ui,-apple-system,sans-serif;}
 h1{font-size:18px; margin:0 0 2px; font-weight:700;}
 .meta{color:#555; font-size:12px; margin-bottom:8px;}
-svg{width:100%; height:auto; max-height:86vh; display:block;}
-@media print{ svg{max-height:none; height:170mm;} }
+svg{position:static; inset:auto; width:100%; height:auto; max-height:82vh; display:block;}
+.ctrl{display:flex; gap:14px; align-items:center; flex-wrap:wrap; margin-bottom:8px;
+      background:#f3f4f6; border:1px solid #d6dae1; border-radius:8px; padding:8px 12px; font-size:14px;}
+.ctrl b{margin-right:2px;}
+.ctrl button{padding:5px 12px; border:1px solid #c6ccd4; border-radius:6px; background:#fff; cursor:pointer; font-size:14px;}
+.ctrl button.on{background:#1d4ed8; color:#fff; border-color:#1d4ed8; font-weight:600;}
+.ctrl .go{margin-left:auto; background:#15803d; color:#fff; border-color:#15803d; font-weight:700;}
+body.nonum .room-label{display:none}
+body.nonum .meta .tot{display:none}
+@media print{ svg{max-height:none; height:168mm;} .ctrl{display:none} }
 </style></head><body>
-<h1>c/ Finlandia 21B, Torrevieja — план</h1>
-<div class="meta">${new Date().toLocaleDateString('uk-UA')} · ${totals}</div>
+<div class="ctrl">
+  <b>Мова:</b>
+  <button id="lUA" class="on">Українська</button>
+  <button id="lES">Español</button>
+  <b style="margin-left:10px">Цифри площ:</b>
+  <button id="nOn" class="on">показати</button>
+  <button id="nOff">прибрати</button>
+  <button id="goPrint" class="go">🖨 Друк / Зберегти PDF</button>
+</div>
+<h1 id="ttl">c/ Finlandia 21B, Torrevieja — план</h1>
+<div class="meta">${new Date().toLocaleDateString('uk-UA')} · <span class="tot">${totals}</span></div>
 ${clone.outerHTML}
-<script>setTimeout(()=>{window.print();},400);<\/script>
+<script>
+const ES={'Кімната':'Habitación','Спальня':'Dormitorio','Спальня 1':'Dormitorio 1',
+ 'Спальня 2':'Dormitorio 2','Спальня 3':'Dormitorio 3','Мастер':'Dormitorio principal',
+ 'Мастер спальня':'Dormitorio principal','Мастер-спальня':'Dormitorio principal',
+ 'Вітальня':'Salón','Кухня':'Cocina','Кухня-зал':'Salón-cocina','Ванна':'Baño',
+ 'Туалет':'Aseo','Санвузол':'Aseo','Комора':'Trastero','Коридор':'Pasillo',
+ 'Передпокій':'Recibidor','Гардероб':'Vestidor','Балкон':'Balcón','Тераса':'Terraza',
+ 'Вхід 1':'Entrada 1','Вхід 2':'Entrada 2'};
+const texts=[...document.querySelectorAll('svg text')];
+for(const t of texts) t.dataset.ua=t.textContent;
+function setLang(es){
+  for(const t of texts){
+    const ua=t.dataset.ua, tr=ES[ua.trim()];
+    t.textContent = es && tr ? tr : ua;
+  }
+  document.getElementById('ttl').textContent =
+    es ? 'c/ Finlandia 21B, Torrevieja — plano de distribución'
+       : 'c/ Finlandia 21B, Torrevieja — план';
+  document.title = es ? 'Finlandia 21B — plano' : 'Finlandia 21B — план';
+  document.getElementById('lES').classList.toggle('on', es);
+  document.getElementById('lUA').classList.toggle('on', !es);
+}
+document.getElementById('lUA').onclick=()=>setLang(false);
+document.getElementById('lES').onclick=()=>setLang(true);
+function setNums(on){
+  document.body.classList.toggle('nonum', !on);
+  document.getElementById('nOn').classList.toggle('on', on);
+  document.getElementById('nOff').classList.toggle('on', !on);
+}
+document.getElementById('nOn').onclick=()=>setNums(true);
+document.getElementById('nOff').onclick=()=>setNums(false);
+document.getElementById('goPrint').onclick=()=>window.print();
+<\/script>
 </body></html>`);
   w.document.close();
 };
